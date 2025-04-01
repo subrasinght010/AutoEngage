@@ -14,6 +14,7 @@ from backend.utilities import handle_call
 from database.db_setup import get_db, init_db
 from database.models import User
 from backend.utilities import hash_password, verify_password
+from starlette.websockets import WebSocketState, WebSocketDisconnect
 
 load_dotenv()
 
@@ -117,33 +118,63 @@ async def websocket_endpoint(websocket: WebSocket):
         if message.get("type") != "auth" or "token" not in message:
             await websocket.close(code=1008, reason="Unauthorized")
             return
+
         try:
             verify_jwt_token(message["token"])
-        except:
+        except Exception as e:
             await websocket.close(code=1008, reason="Invalid or expired token")
             return
+
         while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f"Echo: {data}")
-    except WebSocketDisconnect:
-        pass
+            try:
+                data = await websocket.receive_bytes()  # Expecting binary audio stream
+                if len(data) % 2 != 0:
+                    print(f"Invalid buffer size: {len(data)}")
+                    continue
+                await websocket.send_text(f"Received {len(data)} bytes")
+            except WebSocketDisconnect:
+                print("Client disconnected")
+                break
+            except Exception as e:
+                print(f"WebSocket error: {e}")
+                break
+
+    finally:
+        if websocket.application_state == WebSocketState.CONNECTED:
+            await websocket.close()
+
+
 
 @app.websocket("/audio_stream")
 async def audio_stream(websocket: WebSocket, lead_id: int = Query(None), db: Session = Depends(get_db)):
     await websocket.accept()
     try:
+        # if lead_id is None:
+        #     print("❌ lead_id is missing, closing connection.")
+        #     await websocket.close(code=1008, reason="Missing lead_id")
+        #     return
         message = await websocket.receive_json()
         if message.get("type") != "auth" or "token" not in message:
             await websocket.close(code=1008, reason="Unauthorized")
             return
+
         try:
             verify_jwt_token(message["token"])
-        except:
+        except Exception:
             await websocket.close(code=1008, reason="Invalid or expired token")
             return
+
         await handle_call(websocket, lead_id, db)
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+
     finally:
-        await websocket.close()
+        await db.close()  # Ensure DB session is properly closed
+        if websocket.application_state == WebSocketState.CONNECTED:
+            await websocket.close()
+
+
 
 @app.on_event("startup")
 async def startup():

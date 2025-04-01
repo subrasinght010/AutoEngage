@@ -7,10 +7,12 @@ from typing import Optional
 import webrtcvad
 from backend.ai_core.text_n_speech import process_audio_stream, text_to_speech, denoise_audio
 from .curd import get_lead, get_last_interaction, insert_lead_interaction
+from starlette.websockets import WebSocketState, WebSocketDisconnect
 
 VAD = webrtcvad.Vad(3)  # Aggressive VAD setting
 SILENCE_THRESHOLD = 3  # Maximum consecutive silence prompts before ending call
 
+EXPECTED_FRAME_SIZE = 1024  # Adjust based on your model's requirements
 
 
 SECRET_KEY = "your_secret_key"
@@ -52,6 +54,17 @@ async def handle_call(websocket, lead_id, db):
         while True:
             try:
                 audio_chunk = await asyncio.wait_for(websocket.receive_bytes(), timeout=2)
+                if len(audio_chunk) % EXPECTED_FRAME_SIZE != 0:
+                    print(f"❌ Invalid buffer size ({len(audio_chunk)}), skipping chunk.")
+                    continue
+
+                processed_audio = await denoise_audio(audio_chunk)
+                
+                # Ensure the processed audio also maintains proper buffer size
+                if len(processed_audio) % EXPECTED_FRAME_SIZE != 0:
+                    print(f"❌ Processed audio has an invalid buffer size, skipping.")
+                    continue
+
                 processed_audio = await denoise_audio(audio_chunk)
                 
                 volume_level = np.max(np.abs(np.frombuffer(processed_audio, dtype=np.int16))) / 32768.0
@@ -107,9 +120,9 @@ async def handle_call(websocket, lead_id, db):
         end_time = datetime.datetime.utcnow()
         duration = (end_time - start_time).total_seconds()
 
-        await insert_lead_interaction(db, lead_id, conversation_history, duration)
-        await websocket.close()
-
+        # await insert_lead_interaction(db, lead_id, conversation_history, duration)
+        if websocket.application_state == WebSocketState.CONNECTED:
+            await websocket.close()
 
 
 
