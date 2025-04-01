@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -80,6 +80,65 @@
         <button id="disconnectButton">Disconnect</button>
         <button id="muteButton">🔇 Mute</button>
         <audio id="remoteAudio" autoplay></audio>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html> -->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>AI Voice Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #121212;
+            color: white;
+            padding: 20px;
+        }
+        h2 {
+            color: #4CAF50;
+        }
+        #controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 15px;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+        }
+        #callButton {
+            background-color: #4CAF50;
+            color: white;
+        }
+        #disconnectButton {
+            background-color: #f44336;
+            color: white;
+        }
+        #muteButton {
+            background-color: #ff9800;
+            color: white;
+        }
+        #connectionStatus {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h2>AI Voice Chat</h2>
+    <audio id="remoteAudio" autoplay></audio>
+    <p>Status: <span id="connectionStatus">Disconnected</span></p>
+    <input type="text" id="targetPeerId" placeholder="Enter Peer ID">
+    <div id="controls">
+        <button id="callButton">Start Call</button>
+        <button id="disconnectButton" disabled>Disconnect</button>
+        <button id="muteButton">Mute</button>
     </div>
     <script src="/static/app.js"></script>
 </body>
