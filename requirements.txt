@@ -1,0 +1,19 @@
+fastapi
+uvicorn
+aiortc
+websockets
+openai
+pydub
+langchain
+faiss-cpu
+tiktoken
+sqlalchemy
+psycopg2-binary
+python-dotenv
+requests
+jinja2
+aiofiles
+openai-whisper
+torch
+torchaudio
+# piper-tts
