@@ -15,12 +15,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocketState
 from sqlalchemy.future import select
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dotenv import load_dotenv
 from backend.utilities import handle_call, hash_password, verify_password
 from database.db_setup import get_db, init_db
 from database.models import User
-
+from backend.curd import get_user_by_username
 # ───── Logger Setup ─────────────────────────────────────────
 logger = logging.getLogger("voice-app")
 logger.setLevel(logging.INFO)
@@ -97,18 +98,23 @@ async def signup_page(request: Request):
     return templates.TemplateResponse("signup.html", {"request": request})
 
 @app.get("/home", response_class=HTMLResponse)
-async def home_page(request: Request, user=Depends(require_auth)):
+async def home_page(
+    request: Request,
+    user=Depends(require_auth),             # returns username
+    db: AsyncSession = Depends(get_db)  # put here, not in the decorator
+):
     if isinstance(user, RedirectResponse):
         return user
 
+    user_obj = await get_user_by_username(db=db, username=user)
 
-    user_id = user.id
-    username = user.username
+    if not user_obj:
+        return HTMLResponse("User not found", status_code=404)
 
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "user_id": user_id,
-        "username": username
+        "user_id": user_obj.id,
+        "username": user_obj.username
     })
 
 @app.post("/signup")
@@ -150,17 +156,22 @@ async def voice_chat(websocket: WebSocket, db: Session = Depends(get_db)):
 
     audio_data = b""
     recording = False
-
+    lead_id = None
     try:
         while True:
             try:
+                # import ipdb;ipdb.set_trace()
+
                 message = await websocket.receive()
 
                 if "text" in message:
                     try:
                         data = json.loads(message["text"])
                         if data.get("type") == "start_conversation":
-                            logger.info("🟢 Conversation started")
+                            lead_id = data.get("user_id")
+                            if not lead_id:
+                                return
+                            logger.info(f"🟢 Conversation started With {lead_id}")
                             recording = True
                             audio_data = b""
                         elif data.get("type") == "end_conversation":
@@ -175,7 +186,7 @@ async def voice_chat(websocket: WebSocket, db: Session = Depends(get_db)):
 
                 elif "bytes" in message:
                     data = message["bytes"]
-                    logger.info(f"📥 Received {len(data)} bytes, first 10 bytes: {data[:10]}")
+                    logger.info(f"📥 Received {len(data)} lead {lead_id} bytes, first 10 bytes: {data[:10]}")
                     if recording:
                         if len(data) % 2 != 0:
                             logger.warning("⚠️ Skipping invalid chunk due to odd byte count")

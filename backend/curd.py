@@ -1,7 +1,7 @@
 import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from database.models import Lead, LeadInteraction
+from database.models import Lead, LeadInteraction ,User
 
 async def get_lead(db: AsyncSession, lead_id: int):
     result = await db.execute(select(Lead).where(Lead.id == lead_id))
@@ -32,6 +32,10 @@ async def get_last_interaction(db: AsyncSession, lead_id: int):
 #         )
 #         db.add(interaction)
 #     await db.commit()
+
+async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
+    result = await db.execute(select(User).where(User.username == username))
+    return result.scalars().first()
 
 async def insert_lead_interaction(db: AsyncSession, lead_id: int, conversation, duration):
     """Inserts a lead interaction record into the database."""

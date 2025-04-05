@@ -131,6 +131,17 @@
         await new Promise(resolve => setTimeout(resolve, 500));
       }
 
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+        await new Promise(resolve => {
+          const interval = setInterval(() => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              clearInterval(interval);
+              resolve();
+            }
+          }, 100);
+        });
+    }
+
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({
           type: "start_conversation",
