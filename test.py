@@ -3,7 +3,7 @@ import soundfile as sf
 import matplotlib.pyplot as plt
 
 # Load the audio file
-audio_path = "C:/Users/admin/Desktop/AutoEngage/ai_voice_assistant/received_audio.wav"
+audio_path = "C:/Users/admin/Desktop/AutoEngage/ai_voice_assistant/final_audio.wav"
 y, sr = sf.read(audio_path)
 
 # Compute basic statistics

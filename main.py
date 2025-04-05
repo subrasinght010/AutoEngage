@@ -1,27 +1,24 @@
 import os
 import datetime
-import subprocess
 import wave
 import jwt
 import uvicorn
+import ffmpeg
+import numpy as np
+import soundfile as sf
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Form, Request, Response, Query
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.websockets import WebSocketState
 from sqlalchemy.future import select
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
-from backend.utilities import handle_call
+from backend.utilities import handle_call, hash_password, verify_password
 from database.db_setup import get_db, init_db
 from database.models import User
-from backend.utilities import hash_password, verify_password
-from starlette.websockets import WebSocketState
-
-import asyncio
-import ffmpeg
-import numpy as np
-import soundfile as sf
 
 load_dotenv()
 
@@ -117,129 +114,50 @@ async def login(response: Response, username: str = Form(...), password: str = F
         return response
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        message = await websocket.receive_json()
-        if message.get("type") != "auth" or "token" not in message:
-            await websocket.close(code=1008, reason="Unauthorized")
-            return
-
-        try:
-            verify_jwt_token(message["token"])
-        except Exception as e:
-            await websocket.close(code=1008, reason="Invalid or expired token")
-            return
-
-        while True:
-            try:
-                data = await websocket.receive_bytes()
-                if len(data) % 2 != 0:
-                    print(f"Invalid buffer size: {len(data)}")
-                    continue
-                await websocket.send_text(f"Received {len(data)} bytes")
-            except WebSocketDisconnect:
-                print("Client disconnected")
-                break
-            except Exception as e:
-                print(f"WebSocket error: {e}")
-                break
-
-    finally:
-        if websocket.application_state == WebSocketState.CONNECTED:
-            await websocket.close()
-
-@app.websocket("/audio_stream")
-async def audio_stream(websocket: WebSocket, lead_id: int = Query(None), db: Session = Depends(get_db)):
-    await websocket.accept()
-    try:
-        message = await websocket.receive_json()
-        if message.get("type") != "auth" or "token" not in message:
-            await websocket.close(code=1008, reason="Unauthorized")
-            return
-
-        try:
-            verify_jwt_token(message["token"])
-        except Exception:
-            await websocket.close(code=1008, reason="Invalid or expired token")
-            return
-
-        await handle_call(websocket, lead_id, db)
-
-    except WebSocketDisconnect:
-        print("Client disconnected")
-
-    finally:
-        await db.close()
-        if websocket.application_state == WebSocketState.CONNECTED:
-            await websocket.close()
-
-def decode_opus(opus_data):
-    try:
-        process = (
-            ffmpeg
-            .input('pipe:0', format='webm')
-            .output('pipe:1', format='wav', acodec='pcm_s16le', ar=16000)
-            .global_args('-fflags', '+discardcorrupt')
-            .global_args('-loglevel', 'debug')
-            .run(capture_stdout=True, input=opus_data)
-        )
-        return process[0]
-    except Exception as e:
-        print(f"❌ FFmpeg decoding failed: {e}")
-        return None
-
 @app.websocket("/voice_chat")
 async def voice_chat(websocket: WebSocket, db: Session = Depends(get_db)):
     await websocket.accept()
     audio_data = b""
-
     try:
         while True:
             try:
                 data = await websocket.receive_bytes()
-                audio_data += data
                 print(f"Received {len(data)} bytes, first 10 bytes: {data[:10]}")
 
                 if len(data) % 2 != 0:
-                    print(f"Invalid buffer size: {len(data)}")
+                    print("❌ Skipping invalid chunk due to odd byte count")
                     continue
 
-                pcm_audio = decode_opus(data)
-                if pcm_audio:
-                    audio_array = np.frombuffer(pcm_audio, dtype=np.int16)
-                    sf.write("received_audio_16bitpcm.wav", audio_array, 16000, subtype='PCM_16')
-                    print("✅ Real-time WAV saved")
-                else:
-                    print("❌ Decoding failed, skipping chunk")
-                    continue
-
-                await handle_call(websocket, 2, db)
+                audio_data += data
+                # Optional: process audio_data real-time here
 
             except WebSocketDisconnect:
-                print("Client disconnected")
+                print("🚪 Client disconnected")
                 break
             except Exception as e:
-                print(f"WebSocket error: {e}")
+                print(f"❌ WebSocket error: {e}")
                 break
-
     finally:
         if audio_data:
-            final_pcm_audio = decode_opus(audio_data)
-            if final_pcm_audio:
-                sf.write('final_audio.wav', np.frombuffer(final_pcm_audio, dtype=np.int16), 16000, subtype='PCM_16')
-                print("✅ Final audio saved")
+            save_pcm_to_wav(audio_data, filename='final_audio.wav', sample_rate=44100)
+            print("✅ Final audio saved")
+
         await db.close()
-        if websocket.application_state == WebSocketState.CONNECTED:
+
+        if websocket.application_state != WebSocketState.DISCONNECTED:
             await websocket.close()
+
+
+def save_pcm_to_wav(pcm_data, filename="received_audio_16bitpcm.wav", sample_rate=44100):
+    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
 
 @app.on_event("startup")
 async def startup():
     try:
         await init_db()
-    except:
-        pass
+    except Exception as e:
+        print("DB startup failed:", e)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)

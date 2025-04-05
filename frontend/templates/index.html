@@ -24,9 +24,7 @@
     <h2 class="text-2xl md:text-3xl font-semibold text-center mb-6">Voice Interaction</h2>
     <div id="status" class="text-center text-lg mb-4 text-yellow-400">Status: Not Connected</div>
 
-    <!-- Client & Agent Sections -->
     <div class="flex flex-col md:flex-row gap-6">
-      
       <!-- Client -->
       <div class="flex-1 bg-gray-800 p-4 rounded-lg shadow-md flex flex-col items-center">
         <h3 class="font-semibold text-xl mb-4">Client</h3>
@@ -58,12 +56,13 @@
       </div>
     </div>
   </div>
+
   <script>
     let socket;
-    let mediaRecorder;
-    let audioStream;
+    let audioContext;
     let isMuted = false;
-    let chunks = [];
+    let micStream;
+    let audioWorkletNode;
   
     const clientWaveform = WaveSurfer.create({
       container: '#client-waveform',
@@ -83,72 +82,107 @@
   
     function openWebSocket() {
       socket = new WebSocket("wss://pvc66t9j-8080.inc1.devtunnels.ms/voice_chat");
+      socket.binaryType = "arraybuffer";
   
       socket.onopen = () => {
         document.getElementById("status").innerHTML = "Status: <span class='text-green-500 font-semibold'>Connected</span>";
-        console.log("WebSocket is open now.");
       };
   
-      socket.onclose = (event) => {
+      socket.onclose = () => {
         document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Disconnected</span>";
-        console.log("WebSocket closed:", event);
-        alert("WebSocket connection closed.");
       };
   
       socket.onerror = (error) => {
         document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Error</span>";
         console.error("WebSocket Error:", error);
-        alert("WebSocket connection failed.");
       };
   
-      // Handle incoming audio (optional)
       socket.onmessage = async (event) => {
-        const audioBlob = event.data instanceof Blob ? event.data : new Blob([event.data], { type: "audio/wav" });
+        const audioBlob = new Blob([event.data], { type: "audio/wav" });
         const audioURL = URL.createObjectURL(audioBlob);
         agentWaveform.load(audioURL);
-        const audio = new Audio(audioURL);
-        audio.play();
+        new Audio(audioURL).play();
       };
     }
   
-    document.getElementById("start").onclick = async () => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
+    async function startAudioStream() {
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+  
+      if (!socket || socket.readyState === WebSocket.CLOSED) {
         openWebSocket();
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
   
-      audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm;codecs=opus' });
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext();
   
-      chunks = []; // Clear previous data
+      await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+        class PCMWorkletProcessor extends AudioWorkletProcessor {
+          process(inputs) {
+            const input = inputs[0][0];
+            if (!input) return true;
   
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && !isMuted) {
-          chunks.push(event.data);
+            const pcm = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+              let s = Math.max(-1, Math.min(1, input[i]));
+              pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+  
+            this.port.postMessage(pcm.buffer, [pcm.buffer]);
+            return true;
+          }
+        }
+        registerProcessor('pcm-worklet', PCMWorkletProcessor);
+      `], { type: "application/javascript" })));
+  
+      const micSource = audioContext.createMediaStreamSource(micStream);
+      audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
+  
+      audioWorkletNode.port.onmessage = (event) => {
+        if (!isMuted && socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(event.data);
         }
       };
   
-      mediaRecorder.onstop = async () => {
-        const fullBlob = new Blob(chunks, { type: 'audio/webm;codecs=opus' });
-        const arrayBuffer = await fullBlob.arrayBuffer();
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(arrayBuffer);
-        }
-        chunks = [];
-      };
+      micSource.connect(audioWorkletNode).connect(audioContext.destination);
   
-      mediaRecorder.start(); // Start without a timeslice
       document.getElementById("status").innerHTML = "Status: <span class='text-blue-500 font-semibold'>Live</span>";
-    };
+    }
   
-    document.getElementById("stop").onclick = () => {
-      if (mediaRecorder && mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop();
+    function stopAudioStream() {
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+  
+      if (audioWorkletNode) {
+        audioWorkletNode.disconnect();
+        audioWorkletNode = null;
       }
-      if (audioStream) {
-        audioStream.getTracks().forEach(track => track.stop());
+  
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
       }
+  
+      if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
+      }
+  
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+        socket = null;
+      }
+  
       document.getElementById("status").innerHTML = "Status: <span class='text-gray-400 font-semibold'>Idle</span>";
-    };
+    }
+  
+    document.getElementById("start").onclick = startAudioStream;
+    document.getElementById("stop").onclick = stopAudioStream;
   
     document.getElementById("mute").onclick = () => {
       isMuted = !isMuted;
@@ -161,8 +195,143 @@
       lucide.createIcons();
     };
   
-    lucide.createIcons(); // Initialize icons
+    // Initial state setup
+    document.getElementById("start").disabled = false;
+    document.getElementById("stop").disabled = true;
+    lucide.createIcons();
   </script>
   
+
+<!-- <script>
+  let socket = null;
+  let audioContext = null;
+  let audioWorkletNode = null;
+  let micStream = null;
+  let isMuted = false;
+
+  const clientWaveform = WaveSurfer.create({
+    container: '#client-waveform',
+    waveColor: 'cyan',
+    progressColor: 'deepskyblue',
+    height: 100,
+    barWidth: 2
+  });
+
+  const agentWaveform = WaveSurfer.create({
+    container: '#agent-waveform',
+    waveColor: 'lime',
+    progressColor: 'green',
+    height: 100,
+    barWidth: 2
+  });
+
+  function openWebSocket() {
+    socket = new WebSocket("wss://pvc66t9j-8080.inc1.devtunnels.ms/voice_chat");
+    socket.binaryType = "arraybuffer";
+
+    socket.onopen = () => {
+      document.getElementById("status").innerHTML = "Status: <span class='text-green-500 font-semibold'>Connected</span>";
+    };
+
+    socket.onclose = () => {
+      document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Disconnected</span>";
+    };
+
+    socket.onerror = (error) => {
+      document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Error</span>";
+      console.error("WebSocket Error:", error);
+    };
+
+    socket.onmessage = async (event) => {
+      const audioBlob = new Blob([event.data], { type: "audio/wav" });
+      const audioURL = URL.createObjectURL(audioBlob);
+      agentWaveform.load(audioURL);
+      new Audio(audioURL).play();
+    };
+  }
+
+  async function startAudioStream() {
+    if (!socket || socket.readyState === WebSocket.CLOSED) {
+      openWebSocket();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioContext = new AudioContext();
+
+    await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+      class PCMWorkletProcessor extends AudioWorkletProcessor {
+        process(inputs) {
+          const input = inputs[0][0];
+          if (!input) return true;
+
+          const pcm = new Int16Array(input.length);
+          for (let i = 0; i < input.length; i++) {
+            let s = Math.max(-1, Math.min(1, input[i]));
+            pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+
+          this.port.postMessage(pcm.buffer, [pcm.buffer]);
+          return true;
+        }
+      }
+      registerProcessor('pcm-worklet', PCMWorkletProcessor);
+    `], { type: "application/javascript" })));
+
+    const micSource = audioContext.createMediaStreamSource(micStream);
+
+    audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
+    audioWorkletNode.port.onmessage = (event) => {
+      if (!isMuted && socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(event.data);
+      }
+    };
+
+    micSource.connect(audioWorkletNode).connect(audioContext.destination);
+
+    document.getElementById("status").innerHTML = "Status: <span class='text-blue-500 font-semibold'>Live</span>";
+  }
+
+  function stopAudioStream() {
+    if (audioWorkletNode) {
+      audioWorkletNode.disconnect();
+      audioWorkletNode = null;
+    }
+
+    if (audioContext) {
+      audioContext.close();
+      audioContext = null;
+    }
+
+    if (micStream) {
+      micStream.getTracks().forEach(track => track.stop());
+      micStream = null;
+    }
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.close();
+      socket = null;
+    }
+
+    document.getElementById("status").innerHTML = "Status: <span class='text-gray-400 font-semibold'>Idle</span>";
+  }
+
+  document.getElementById("start").onclick = startAudioStream;
+  document.getElementById("stop").onclick = stopAudioStream;
+
+  document.getElementById("mute").onclick = () => {
+    isMuted = !isMuted;
+    const muteBtn = document.getElementById("mute");
+    muteBtn.innerHTML = isMuted
+      ? `<i data-lucide="mic" class="w-5 h-5"></i> Unmute`
+      : `<i data-lucide="mic-off" class="w-5 h-5"></i> Mute`;
+    muteBtn.classList.toggle("bg-gray-500");
+    muteBtn.classList.toggle("bg-yellow-500");
+    lucide.createIcons();
+  };
+
+  lucide.createIcons();
+</script> -->
+
 </body>
 </html>
