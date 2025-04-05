@@ -29,46 +29,47 @@ async def generate_greeting(lead, last_interaction):
     return f"Hello {lead['name']}, how can I help you today?"
     
 
-async def handle_call(websocket, lead_id, db):
+
+async def handle_call(audio_queue: asyncio.Queue, websocket, lead_id, db):
     """Handles real-time conversation with speech detection, silence handling, and AI-user interaction."""
-    
+
     conversation_history = []
     ai_speaking = False
     user_speaking = False
     silence_counter = 0
+    greeting_sent = False
 
-    lead = {"name":'subrat',"topic":'nothing..'}#await get_lead(db, lead_id)
+    lead = {"name": 'subrat', "topic": 'nothing..'}  # await get_lead(db, lead_id)
     last_interaction = await get_last_interaction(db, lead_id)
     greeting = await generate_greeting(lead, last_interaction)
     print(greeting)
-    # await websocket.send_bytes(text_to_speech(greeting))
-    # import ipdb;ipdb.set_trace()
+
     audio_response = await text_to_speech(greeting)
     if audio_response is None:
         print("❌ text_to_speech() returned None. Skipping audio response.")
-    else:
+    elif not greeting_sent:
         await websocket.send_bytes(audio_response)
+        greeting_sent = True
 
     start_time = datetime.datetime.utcnow()
+
     try:
         while True:
             try:
-                audio_chunk = await asyncio.wait_for(websocket.receive_bytes(), timeout=2)
+                audio_chunk = await asyncio.wait_for(audio_queue.get(), timeout=2)
+
                 if len(audio_chunk) % EXPECTED_FRAME_SIZE != 0:
                     print(f"❌ Invalid buffer size ({len(audio_chunk)}), skipping chunk.")
                     continue
 
                 processed_audio = await denoise_audio(audio_chunk)
-                
-                # Ensure the processed audio also maintains proper buffer size
+
                 if len(processed_audio) % EXPECTED_FRAME_SIZE != 0:
                     print(f"❌ Processed audio has an invalid buffer size, skipping.")
                     continue
 
-                processed_audio = await denoise_audio(audio_chunk)
-                
                 volume_level = np.max(np.abs(np.frombuffer(processed_audio, dtype=np.int16))) / 32768.0
-                
+
                 if ai_speaking and VAD.is_speech(processed_audio, 16000):
                     ai_speaking = False
                     await websocket.send_bytes(await text_to_speech("Oh! You have something to say. Go ahead, I'm listening."))
@@ -83,25 +84,26 @@ async def handle_call(websocket, lead_id, db):
                     ]
                     if silence_counter >= SILENCE_THRESHOLD:
                         await websocket.send_bytes(await text_to_speech(prompts[-1]))
+                        print("Ending call due to silence.")
                         break
                     await websocket.send_bytes(await text_to_speech(prompts[min(silence_counter, 2)]))
                     continue
-                
+
                 silence_counter = 0
                 user_text = await process_audio_stream(processed_audio)
                 if not user_text.strip():
                     continue
-                
+
                 user_speaking = True
-                
+
                 try:
-                    ai_response = generate_ai_response(user_text, conversation_history)
-                    ai_audio = await text_to_speech(ai_response)
+                    # ai_response = generate_ai_response(user_text, conversation_history)
+                    ai_audio = await text_to_speech(user_text)
                 except Exception as e:
                     print(f"AI Response Error: {e}")
                     ai_response = "I'm sorry, I didn't understand that."
                     ai_audio = await text_to_speech(ai_response)
-                
+
                 conversation_history.append({"user": user_text, "AI": ai_response})
                 ai_speaking = True
                 await websocket.send_bytes(ai_audio)
@@ -112,17 +114,115 @@ async def handle_call(websocket, lead_id, db):
                     user_speaking = False
                     await websocket.send_bytes(await text_to_speech("I'm listening, please continue."))
                     continue
-    
+
     except Exception as e:
         print(f"WebSocket Error: {e}")
-    
+
     finally:
         end_time = datetime.datetime.utcnow()
         duration = (end_time - start_time).total_seconds()
-
         # await insert_lead_interaction(db, lead_id, conversation_history, duration)
         if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.close()
+
+
+
+# async def handle_call(data, websocket, lead_id, db):
+#     """Handles real-time conversation with speech detection, silence handling, and AI-user interaction."""
+    
+#     conversation_history = []
+#     ai_speaking = False
+#     user_speaking = False
+#     silence_counter = 0
+#     greeting_sent = False
+
+#     lead = {"name":'subrat',"topic":'nothing..'}#await get_lead(db, lead_id)
+#     last_interaction = await get_last_interaction(db, lead_id)
+#     greeting = await generate_greeting(lead, last_interaction)
+#     print(greeting)
+#     # await websocket.send_bytes(text_to_speech(greeting))
+#     # import ipdb;ipdb.set_trace()
+#     audio_response = await text_to_speech(greeting)
+#     if audio_response is None:
+#         print("❌ text_to_speech() returned None. Skipping audio response.")
+#     elif not greeting_sent :
+#         await websocket.send_bytes(audio_response)
+#         greeting_sent
+
+#     start_time = datetime.datetime.utcnow()
+#     try:
+#         while True:
+#             try:
+#                 audio_chunk = await asyncio.wait_for(websocket.receive_bytes(), timeout=2)
+#                 if len(audio_chunk) % EXPECTED_FRAME_SIZE != 0:
+#                     print(f"❌ Invalid buffer size ({len(audio_chunk)}), skipping chunk.")
+#                     continue
+
+#                 processed_audio = await denoise_audio(audio_chunk)
+                
+#                 # Ensure the processed audio also maintains proper buffer size
+#                 if len(processed_audio) % EXPECTED_FRAME_SIZE != 0:
+#                     print(f"❌ Processed audio has an invalid buffer size, skipping.")
+#                     continue
+
+#                 processed_audio = await denoise_audio(audio_chunk)
+                
+#                 volume_level = np.max(np.abs(np.frombuffer(processed_audio, dtype=np.int16))) / 32768.0
+                
+#                 if ai_speaking and VAD.is_speech(processed_audio, 16000):
+#                     ai_speaking = False
+#                     await websocket.send_bytes(await text_to_speech("Oh! You have something to say. Go ahead, I'm listening."))
+#                     continue
+
+#                 if volume_level < 0.3 or not VAD.is_speech(processed_audio, 16000):
+#                     silence_counter += 1
+#                     prompts = [
+#                         "Could you please repeat that? I couldn't hear you clearly.",
+#                         "There seems to be some background noise. Could you speak a bit louder?",
+#                         "I’m having trouble hearing. Maybe we can try again later."
+#                     ]
+#                     if silence_counter >= SILENCE_THRESHOLD:
+#                         await websocket.send_bytes(await text_to_speech(prompts[-1]))
+#                         break
+#                     await websocket.send_bytes(await text_to_speech(prompts[min(silence_counter, 2)]))
+#                     continue
+                
+#                 silence_counter = 0
+#                 user_text = await process_audio_stream(processed_audio)
+#                 if not user_text.strip():
+#                     continue
+                
+#                 user_speaking = True
+                
+#                 try:
+#                     ai_response = generate_ai_response(user_text, conversation_history)
+#                     ai_audio = await text_to_speech(ai_response)
+#                 except Exception as e:
+#                     print(f"AI Response Error: {e}")
+#                     ai_response = "I'm sorry, I didn't understand that."
+#                     ai_audio = await text_to_speech(ai_response)
+                
+#                 conversation_history.append({"user": user_text, "AI": ai_response})
+#                 ai_speaking = True
+#                 await websocket.send_bytes(ai_audio)
+#                 ai_speaking = False
+
+#             except asyncio.TimeoutError:
+#                 if user_speaking:
+#                     user_speaking = False
+#                     await websocket.send_bytes(await text_to_speech("I'm listening, please continue."))
+#                     continue
+    
+#     except Exception as e:
+#         print(f"WebSocket Error: {e}")
+    
+#     finally:
+#         end_time = datetime.datetime.utcnow()
+#         duration = (end_time - start_time).total_seconds()
+
+#         # await insert_lead_interaction(db, lead_id, conversation_history, duration)
+#         if websocket.application_state == WebSocketState.CONNECTED:
+#             await websocket.close()
 
 
 

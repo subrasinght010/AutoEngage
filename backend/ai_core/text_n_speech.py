@@ -1,3 +1,4 @@
+from asyncio.log import logger
 import whisper
 import numpy as np
 import io
@@ -57,11 +58,32 @@ def process_audio_stream(audio_bytes):
 
     return result.get("text", "")
 
-async def denoise_audio(audio_bytes):
-    """Reduces noise in an audio byte stream."""
-    audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-    reduced_noise = nr.reduce_noise(y=audio_np, sr=16000)
-    return reduced_noise.astype(np.int16).tobytes()
+
+
+async def denoise_audio(audio_bytes: bytes) -> bytes:
+    """
+    Reduces noise in an audio byte stream using noisereduce.
+    Includes checks for silent or invalid data to prevent runtime errors.
+    """
+    try:
+        if not audio_bytes or len(audio_bytes) < 2048:
+            logger.warning("⚠️ Skipping denoise due to small or empty chunk")
+            return audio_bytes
+
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+
+        # Avoid processing silent or invalid audio
+        if np.all(audio_np == 0) or np.max(np.abs(audio_np)) < 100:
+            logger.info("🔇 Skipping denoise for silent/low-energy audio")
+            return audio_bytes
+
+        reduced_noise = nr.reduce_noise(y=audio_np, sr=16000)
+        return reduced_noise.astype(np.int16).tobytes()
+
+    except Exception as e:
+        logger.error(f"❌ Error during noise reduction: {e}")
+        return audio_bytes  # Return original audio in case of error
+
 
 # Example usage
 if __name__ == "__main__":

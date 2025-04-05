@@ -78,7 +78,8 @@
     let isMuted = false;
     let micStream;
     let audioWorkletNode;
-
+    let pingInterval;
+  
     const clientWaveform = WaveSurfer.create({
       container: '#client-waveform',
       waveColor: 'cyan',
@@ -86,7 +87,7 @@
       height: 100,
       barWidth: 2
     });
-
+  
     const agentWaveform = WaveSurfer.create({
       container: '#agent-waveform',
       waveColor: 'lime',
@@ -94,128 +95,167 @@
       height: 100,
       barWidth: 2
     });
-
+  
+    function startPing() {
+      pingInterval = setInterval(() => {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 20000);
+    }
+  
+    function stopPing() {
+      if (pingInterval) clearInterval(pingInterval);
+    }
+  
     function openWebSocket() {
       socket = new WebSocket("wss://pvc66t9j-8080.inc1.devtunnels.ms/voice_chat");
       socket.binaryType = "arraybuffer";
-
+  
       socket.onopen = () => {
         document.getElementById("status").innerHTML = "Status: <span class='text-green-500 font-semibold'>Connected</span>";
+        console.log("✅ WebSocket connected");
       };
-
-      socket.onclose = () => {
+  
+      socket.onclose = (event) => {
         document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Disconnected</span>";
+        console.warn("❌ WebSocket closed:", event);
       };
-
+  
       socket.onerror = (error) => {
         document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Error</span>";
-        console.error("WebSocket Error:", error);
+        console.error("⚠️ WebSocket error:", error);
       };
-
+  
       socket.onmessage = async (event) => {
-        const audioBlob = new Blob([event.data], { type: "audio/wav" });
-        const audioURL = URL.createObjectURL(audioBlob);
-        agentWaveform.load(audioURL);
-        new Audio(audioURL).play();
+        try {
+          const audioBlob = new Blob([event.data], { type: "audio/wav" });
+          const audioURL = URL.createObjectURL(audioBlob);
+          agentWaveform.load(audioURL);
+          new Audio(audioURL).play();
+        } catch (err) {
+          console.error("🎧 Error playing audio:", err);
+        }
       };
     }
-
+  
+    async function waitForSocketConnection() {
+      return new Promise(resolve => {
+        const checkSocket = setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            clearInterval(checkSocket);
+            resolve();
+          }
+        }, 100);
+      });
+    }
+  
     async function startAudioStream() {
       const startBtn = document.getElementById("start");
       const stopBtn = document.getElementById("stop");
       startBtn.disabled = true;
       stopBtn.disabled = false;
-
+  
       if (!socket || socket.readyState === WebSocket.CLOSED) {
         openWebSocket();
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(r => setTimeout(r, 500));
       }
-
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-        await new Promise(resolve => {
-          const interval = setInterval(() => {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-              clearInterval(interval);
-              resolve();
-            }
-          }, 100);
-        });
-    }
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
+  
+      await waitForSocketConnection();
+  
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({
           type: "start_conversation",
           user_id: userId
         }));
       }
-
+  
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioContext = new AudioContext();
-
+  
       await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([`
         class PCMWorkletProcessor extends AudioWorkletProcessor {
           process(inputs) {
             const input = inputs[0][0];
             if (!input) return true;
-
+  
             const pcm = new Int16Array(input.length);
             for (let i = 0; i < input.length; i++) {
               let s = Math.max(-1, Math.min(1, input[i]));
               pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
-
+  
             this.port.postMessage(pcm.buffer, [pcm.buffer]);
             return true;
           }
         }
         registerProcessor('pcm-worklet', PCMWorkletProcessor);
       `], { type: "application/javascript" })));
-
+  
       const micSource = audioContext.createMediaStreamSource(micStream);
       audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
-
+  
       audioWorkletNode.port.onmessage = (event) => {
-        if (!isMuted && socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(event.data);
+        if (!isMuted && socket?.readyState === WebSocket.OPEN) {
+          try {
+            socket.send(event.data);
+          } catch (err) {
+            console.warn("⚠️ Failed to send audio data:", err);
+          }
         }
       };
-
+  
       micSource.connect(audioWorkletNode).connect(audioContext.destination);
-
+  
       document.getElementById("status").innerHTML = "Status: <span class='text-blue-500 font-semibold'>Live</span>";
+      startPing();
     }
-
+  
     function stopAudioStream() {
       const startBtn = document.getElementById("start");
       const stopBtn = document.getElementById("stop");
       startBtn.disabled = false;
       stopBtn.disabled = true;
-
+  
       if (audioWorkletNode) {
         audioWorkletNode.disconnect();
         audioWorkletNode = null;
       }
-
+  
       if (audioContext) {
         audioContext.close();
         audioContext = null;
       }
-
+  
       if (micStream) {
         micStream.getTracks().forEach(track => track.stop());
         micStream = null;
       }
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
+  
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "end_conversation" }));
       }
-
+  
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+  
+      stopPing();
+  
       document.getElementById("status").innerHTML = "Status: <span class='text-gray-400 font-semibold'>Idle</span>";
     }
-
+  
+    window.addEventListener("beforeunload", () => {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "end_conversation" }));
+        socket.close();
+      }
+    });
+  
     document.getElementById("start").onclick = startAudioStream;
     document.getElementById("stop").onclick = stopAudioStream;
-
+  
     document.getElementById("mute").onclick = () => {
       isMuted = !isMuted;
       const muteBtn = document.getElementById("mute");
@@ -226,10 +266,11 @@
       muteBtn.classList.toggle("bg-yellow-500");
       lucide.createIcons();
     };
-
+  
     document.getElementById("start").disabled = false;
     document.getElementById("stop").disabled = true;
     lucide.createIcons();
   </script>
+  
 </body>
 </html>
