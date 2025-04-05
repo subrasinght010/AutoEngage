@@ -1,5 +1,7 @@
 import os
 import datetime
+import subprocess
+import wave
 import jwt
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Form, Request, Response, Query
@@ -14,7 +16,12 @@ from backend.utilities import handle_call
 from database.db_setup import get_db, init_db
 from database.models import User
 from backend.utilities import hash_password, verify_password
-from starlette.websockets import WebSocketState, WebSocketDisconnect
+from starlette.websockets import WebSocketState
+
+import asyncio
+import ffmpeg
+import numpy as np
+import soundfile as sf
 
 load_dotenv()
 
@@ -127,7 +134,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
         while True:
             try:
-                data = await websocket.receive_bytes()  # Expecting binary audio stream
+                data = await websocket.receive_bytes()
                 if len(data) % 2 != 0:
                     print(f"Invalid buffer size: {len(data)}")
                     continue
@@ -143,16 +150,10 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.close()
 
-
-
 @app.websocket("/audio_stream")
 async def audio_stream(websocket: WebSocket, lead_id: int = Query(None), db: Session = Depends(get_db)):
     await websocket.accept()
     try:
-        # if lead_id is None:
-        #     print("❌ lead_id is missing, closing connection.")
-        #     await websocket.close(code=1008, reason="Missing lead_id")
-        #     return
         message = await websocket.receive_json()
         if message.get("type") != "auth" or "token" not in message:
             await websocket.close(code=1008, reason="Unauthorized")
@@ -170,11 +171,68 @@ async def audio_stream(websocket: WebSocket, lead_id: int = Query(None), db: Ses
         print("Client disconnected")
 
     finally:
-        await db.close()  # Ensure DB session is properly closed
+        await db.close()
         if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.close()
 
+def decode_opus(opus_data):
+    try:
+        process = (
+            ffmpeg
+            .input('pipe:0', format='webm')
+            .output('pipe:1', format='wav', acodec='pcm_s16le', ar=16000)
+            .global_args('-fflags', '+discardcorrupt')
+            .global_args('-loglevel', 'debug')
+            .run(capture_stdout=True, input=opus_data)
+        )
+        return process[0]
+    except Exception as e:
+        print(f"❌ FFmpeg decoding failed: {e}")
+        return None
 
+@app.websocket("/voice_chat")
+async def voice_chat(websocket: WebSocket, db: Session = Depends(get_db)):
+    await websocket.accept()
+    audio_data = b""
+
+    try:
+        while True:
+            try:
+                data = await websocket.receive_bytes()
+                audio_data += data
+                print(f"Received {len(data)} bytes, first 10 bytes: {data[:10]}")
+
+                if len(data) % 2 != 0:
+                    print(f"Invalid buffer size: {len(data)}")
+                    continue
+
+                pcm_audio = decode_opus(data)
+                if pcm_audio:
+                    audio_array = np.frombuffer(pcm_audio, dtype=np.int16)
+                    sf.write("received_audio_16bitpcm.wav", audio_array, 16000, subtype='PCM_16')
+                    print("✅ Real-time WAV saved")
+                else:
+                    print("❌ Decoding failed, skipping chunk")
+                    continue
+
+                await handle_call(websocket, 2, db)
+
+            except WebSocketDisconnect:
+                print("Client disconnected")
+                break
+            except Exception as e:
+                print(f"WebSocket error: {e}")
+                break
+
+    finally:
+        if audio_data:
+            final_pcm_audio = decode_opus(audio_data)
+            if final_pcm_audio:
+                sf.write('final_audio.wav', np.frombuffer(final_pcm_audio, dtype=np.int16), 16000, subtype='PCM_16')
+                print("✅ Final audio saved")
+        await db.close()
+        if websocket.application_state == WebSocketState.CONNECTED:
+            await websocket.close()
 
 @app.on_event("startup")
 async def startup():

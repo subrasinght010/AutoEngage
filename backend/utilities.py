@@ -25,7 +25,7 @@ def generate_ai_response(user_text, history):
 async def generate_greeting(lead, last_interaction):
     """Generates a personalized greeting based on lead data and last interaction."""
     if last_interaction:
-        return f"Hello {lead['name']}, last time we spoke about {last_interaction['topic']}. How can I assist today?"
+        return f"Hello {lead['name']}, last time we spoke about . How can I assist today?"
     return f"Hello {lead['name']}, how can I help you today?"
     
 

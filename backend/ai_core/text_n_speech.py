@@ -13,7 +13,7 @@ from gtts import gTTS
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Load Whisper model
-model = whisper.load_model("small").to(device)
+model = whisper.load_model("tiny").to("cpu")  # Use "base" if "tiny" is too small
 
 # Function to generate TTS and send it as a byte stream
 async def text_to_speech(text):
