@@ -3,99 +3,165 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Voice Interaction UI</title>
+  <title>Voice Chat</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@6.0.0/dist/wavesurfer.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
   <style>
     body {
-      background-color: #1a1a2e;
-      color: white;
+      background: radial-gradient(circle at top left, #0f0c29, #302b63, #24243e);
+      color: #e0e0e0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
-    .waveform-container {
-      width: 100%;
-      height: 100px;
+
+    .status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 30px;
+      background-color: rgba(17, 24, 39, 0.8);
+      font-size: 1rem;
+      font-weight: 500;
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .circle-container {
+      display: flex;
+      justify-content: center;
+      align-items: flex-end;
+      height: 120px;
+      gap: 30px;
+      margin-top: 2rem;
+    }
+
+    .circle {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #00f5c9, #9c42f5);
+      box-shadow: 0 0 10px #00f5c9, 0 0 20px #9c42f5;
+      transition: transform 0.2s ease-in-out, opacity 0.2s;
+      transform: scale(1);
+      opacity: 0.4;
+    }
+
+    .circle.animate {
+      animation: pulse 1s infinite ease-in-out;
+      opacity: 1;
+    }
+
+    .circle:nth-child(2).animate { animation-delay: 0.1s; }
+    .circle:nth-child(3).animate { animation-delay: 0.2s; }
+    .circle:nth-child(4).animate { animation-delay: 0.3s; }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.8); }
+    }
+
+    .btn {
+      padding: 14px 28px;
+      border-radius: 9999px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+    }
+
+    .btn:hover {
+      transform: scale(1.05);
+      background: rgba(255,255,255,0.08);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .start-btn { border-color: #00f5c9; }
+    .stop-btn { border-color: #f87171; }
+    .mute-btn { border-color: #fbbf24; }
+
+    h1 {
+      text-align: center;
+      font-size: 2rem;
+      margin-top: 2rem;
+      background: linear-gradient(to right, #00f5c9, #9c42f5);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-weight: bold;
+    }
+
+    @media (max-width: 600px) {
+      .circle-container {
+        gap: 15px;
+      }
+      .btn {
+        padding: 10px 18px;
+        font-size: 0.9rem;
+      }
     }
   </style>
-
-  <!-- Inject user_id from backend using Jinja -->
-  <script>
-    const userId = "{{ user_id }}";  // Jinja will replace this with actual user ID
-  </script>
 </head>
-<body class="min-h-screen flex justify-center items-center px-4 pt-20">
+<body>
 
-  <!-- Navigation Bar -->
-  <nav class="bg-gray-800 w-full p-4 shadow-md fixed top-0 left-0 z-50">
-    <div class="container mx-auto flex justify-between items-center">
-      <h1 class="text-xl font-bold text-white">Voice Chat App</h1>
-      <span id="user-name" class="text-white text-sm">Logged in as: <span class="font-semibold">{{ username }}</span></span>
+  <div class="status-bar">
+    <div class="text-lg font-bold">👤  <span id="username">guest</span></div>
+    
+  </div>
+
+  <div class="flex flex-col items-center justify-center min-h-[80vh] space-y-8">
+    <h1>🎧 Real-Time Voice Chat</h1>
+
+    <div class="flex gap-2 items-center">
+      <span id="status" class="text-green-400">Not Connected</span>
     </div>
-  </nav>
 
-  <!-- Main UI -->
-  <div class="container max-w-6xl bg-gray-900 p-6 rounded-lg shadow-lg w-full">
-    <h2 class="text-2xl md:text-3xl font-semibold text-center mb-6">Voice Interaction</h2>
-    <div id="status" class="text-center text-lg mb-4 text-yellow-400">Status: Not Connected</div>
+    <div class="flex gap-4 flex-wrap justify-center">
+      <button id="start" class="btn start-btn">
+        <i data-lucide="phone-call" class="w-5 h-5"></i> Start
+      </button>
+      <button id="stop" class="btn stop-btn" disabled>
+        <i data-lucide="phone-off" class="w-5 h-5"></i> Stop
+      </button>
+      <button id="mute" class="btn mute-btn">
+        <i data-lucide="mic-off" class="w-5 h-5"></i> Mute
+      </button>
+    </div>
 
-    <div class="flex flex-col md:flex-row gap-6">
-      <!-- Client -->
-      <div class="flex-1 bg-gray-800 p-4 rounded-lg shadow-md flex flex-col items-center">
-        <h3 class="font-semibold text-xl mb-4">Client</h3>
-        <div id="client-waveform" class="waveform-container mb-4 w-full"></div>
-        <div class="flex flex-col sm:flex-row gap-3 w-full justify-center">
-
-          <button id="start" class="flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white font-medium rounded-xl px-6 py-3 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-400 w-full sm:w-auto">
-            <i data-lucide="phone-call" class="w-5 h-5"></i>
-            Start Call
-          </button>
-
-          <button id="mute" class="flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-white font-medium rounded-xl px-6 py-3 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-yellow-400 w-full sm:w-auto">
-            <i data-lucide="mic-off" class="w-5 h-5"></i>
-            Mute
-          </button>
-
-          <button id="stop" class="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl px-6 py-3 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-400 w-full sm:w-auto">
-            <i data-lucide="phone-off" class="w-5 h-5"></i>
-            Stop Call
-          </button>
-
-        </div>
-      </div>
-
-      <!-- Agent -->
-      <div class="flex-1 bg-gray-800 p-4 rounded-lg shadow-md flex flex-col items-center">
-        <h3 class="font-semibold text-xl mb-4">Agent</h3>
-        <div id="agent-waveform" class="waveform-container mb-4 w-full"></div>
-      </div>
+    <div id="circle-container" class="circle-container">
+      <div class="circle" id="circle1"></div>
+      <div class="circle" id="circle2"></div>
+      <div class="circle" id="circle3"></div>
+      <div class="circle" id="circle4"></div>
     </div>
   </div>
 
-  <!-- JavaScript Logic -->
   <script>
-    let socket;
-    let audioContext;
+    lucide.createIcons();
+    const userId = "{{ user_id }}";
+    const username = "{{username}}";
+    document.getElementById("username").textContent = username;
+
+    let socket, audioContext, micStream, audioWorkletNode, micVAD, pingInterval;
     let isMuted = false;
-    let micStream;
-    let audioWorkletNode;
-    let pingInterval;
-  
-    const clientWaveform = WaveSurfer.create({
-      container: '#client-waveform',
-      waveColor: 'cyan',
-      progressColor: 'deepskyblue',
-      height: 100,
-      barWidth: 2
-    });
-  
-    const agentWaveform = WaveSurfer.create({
-      container: '#agent-waveform',
-      waveColor: 'lime',
-      progressColor: 'green',
-      height: 100,
-      barWidth: 2
-    });
-  
+    let speechActive = false;
+
+    function updateStatus(text, color = 'text-green-400') {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = text;
+      statusEl.className = color;
+    }
+
     function startPing() {
       pingInterval = setInterval(() => {
         if (socket?.readyState === WebSocket.OPEN) {
@@ -103,174 +169,152 @@
         }
       }, 20000);
     }
-  
+
     function stopPing() {
-      if (pingInterval) clearInterval(pingInterval);
+      clearInterval(pingInterval);
     }
-  
+
     function openWebSocket() {
-      socket = new WebSocket("wss://pvc66t9j-8080.inc1.devtunnels.ms/voice_chat");
+      socket = new WebSocket("wss://8nmwbg89-8080.inc1.devtunnels.ms/voice_chat");
       socket.binaryType = "arraybuffer";
-  
+
       socket.onopen = () => {
-        document.getElementById("status").innerHTML = "Status: <span class='text-green-500 font-semibold'>Connected</span>";
-        console.log("✅ WebSocket connected");
+        updateStatus("Connected", "text-blue-400");
+        document.getElementById("start").disabled = false;
+        document.getElementById("stop").disabled = false;
       };
-  
-      socket.onclose = (event) => {
-        document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Disconnected</span>";
-        console.warn("❌ WebSocket closed:", event);
+      socket.onclose = () => {
+        updateStatus("Disconnected", "text-red-400");
+        document.getElementById("start").disabled = false;
+        document.getElementById("stop").disabled = true;
+        stopPing();
       };
-  
-      socket.onerror = (error) => {
-        document.getElementById("status").innerHTML = "Status: <span class='text-red-500 font-semibold'>Error</span>";
-        console.error("⚠️ WebSocket error:", error);
+      socket.onerror = () => {
+        updateStatus("Connection Error", "text-yellow-400");
+        stopPing();
       };
-  
-      socket.onmessage = async (event) => {
-        try {
-          const audioBlob = new Blob([event.data], { type: "audio/wav" });
-          const audioURL = URL.createObjectURL(audioBlob);
-          agentWaveform.load(audioURL);
-          new Audio(audioURL).play();
-        } catch (err) {
-          console.error("🎧 Error playing audio:", err);
-        }
+      socket.onmessage = (event) => {
+        const audioBlob = new Blob([event.data], { type: "audio/wav" });
+        const audioURL = URL.createObjectURL(audioBlob);
+        new Audio(audioURL).play();
       };
     }
-  
+
     async function waitForSocketConnection() {
       return new Promise(resolve => {
-        const checkSocket = setInterval(() => {
+        const check = setInterval(() => {
           if (socket?.readyState === WebSocket.OPEN) {
-            clearInterval(checkSocket);
+            clearInterval(check);
             resolve();
           }
         }, 100);
       });
     }
-  
+
+    async function startVAD() {
+      micVAD = await vad.MicVAD.new({
+        onSpeechStart: () => {
+          if (!speechActive) {
+            speechActive = true;
+            document.querySelectorAll('.circle').forEach(c => c.classList.add('animate'));
+            updateStatus("Live", "text-green-400");
+          }
+        },
+        onSpeechEnd: () => {
+          speechActive = false;
+          document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+          updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
+        }
+      });
+      await micVAD.start();
+    }
+
     async function startAudioStream() {
-      const startBtn = document.getElementById("start");
-      const stopBtn = document.getElementById("stop");
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
-  
+      document.getElementById("start").disabled = true;
+      document.getElementById("stop").disabled = false;
+
       if (!socket || socket.readyState === WebSocket.CLOSED) {
         openWebSocket();
         await new Promise(r => setTimeout(r, 500));
       }
-  
+
       await waitForSocketConnection();
-  
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          type: "start_conversation",
-          user_id: userId
-        }));
-      }
-  
+      socket.send(JSON.stringify({ type: "start_conversation", user_id: userId }));
+
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioContext = new AudioContext();
-  
-      await audioContext.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+
+      const workletBlob = new Blob([`
         class PCMWorkletProcessor extends AudioWorkletProcessor {
           process(inputs) {
             const input = inputs[0][0];
             if (!input) return true;
-  
             const pcm = new Int16Array(input.length);
             for (let i = 0; i < input.length; i++) {
               let s = Math.max(-1, Math.min(1, input[i]));
               pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
-  
             this.port.postMessage(pcm.buffer, [pcm.buffer]);
             return true;
           }
         }
         registerProcessor('pcm-worklet', PCMWorkletProcessor);
-      `], { type: "application/javascript" })));
-  
+      `], { type: "application/javascript" });
+
+      const workletURL = URL.createObjectURL(workletBlob);
+      await audioContext.audioWorklet.addModule(workletURL);
+
       const micSource = audioContext.createMediaStreamSource(micStream);
       audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
-  
+
       audioWorkletNode.port.onmessage = (event) => {
         if (!isMuted && socket?.readyState === WebSocket.OPEN) {
-          try {
-            socket.send(event.data);
-          } catch (err) {
-            console.warn("⚠️ Failed to send audio data:", err);
-          }
+          socket.send(event.data);
         }
       };
-  
+
       micSource.connect(audioWorkletNode).connect(audioContext.destination);
-  
-      document.getElementById("status").innerHTML = "Status: <span class='text-blue-500 font-semibold'>Live</span>";
+
+      await startVAD();
       startPing();
     }
-  
-    function stopAudioStream() {
-      const startBtn = document.getElementById("start");
-      const stopBtn = document.getElementById("stop");
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-  
-      if (audioWorkletNode) {
-        audioWorkletNode.disconnect();
-        audioWorkletNode = null;
-      }
-  
-      if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-      }
-  
-      if (micStream) {
-        micStream.getTracks().forEach(track => track.stop());
-        micStream = null;
-      }
-  
+
+    async function stopAudioStream() {
+      document.getElementById("start").disabled = false;
+      document.getElementById("stop").disabled = true;
+
+      if (audioWorkletNode) audioWorkletNode.disconnect();
+      if (audioContext) await audioContext.close();
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (micVAD) await micVAD.pause();
+
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "end_conversation" }));
       }
-  
+
       if (socket) {
         socket.close();
         socket = null;
       }
-  
+
+      document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+      updateStatus("Disconnected", "text-red-400");
       stopPing();
-  
-      document.getElementById("status").innerHTML = "Status: <span class='text-gray-400 font-semibold'>Idle</span>";
     }
-  
-    window.addEventListener("beforeunload", () => {
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "end_conversation" }));
-        socket.close();
-      }
-    });
-  
-    document.getElementById("start").onclick = startAudioStream;
-    document.getElementById("stop").onclick = stopAudioStream;
-  
-    document.getElementById("mute").onclick = () => {
+
+    document.getElementById("start").addEventListener("click", startAudioStream);
+    document.getElementById("stop").addEventListener("click", stopAudioStream);
+
+    document.getElementById("mute").addEventListener("click", () => {
       isMuted = !isMuted;
       const muteBtn = document.getElementById("mute");
       muteBtn.innerHTML = isMuted
         ? `<i data-lucide="mic" class="w-5 h-5"></i> Unmute`
         : `<i data-lucide="mic-off" class="w-5 h-5"></i> Mute`;
-      muteBtn.classList.toggle("bg-gray-500");
-      muteBtn.classList.toggle("bg-yellow-500");
+      updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
       lucide.createIcons();
-    };
-  
-    document.getElementById("start").disabled = false;
-    document.getElementById("stop").disabled = true;
-    lucide.createIcons();
+    });
   </script>
-  
+
 </body>
 </html>
