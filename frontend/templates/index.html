@@ -268,7 +268,7 @@
       audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
 
       audioWorkletNode.port.onmessage = (event) => {
-        if (!isMuted && socket?.readyState === WebSocket.OPEN) {
+        if (!isMuted && speechActive && socket?.readyState === WebSocket.OPEN) {
           socket.send(event.data);
         }
       };

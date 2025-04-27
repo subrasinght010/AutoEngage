@@ -1,6 +1,10 @@
 import os
 import datetime
 import json
+import time
+import traceback
+from backend.ai_core.text_n_speech import transcribe_with_faster_whisper
+from backend.audio import AudioBuffer, RealTimeSileroVAD
 import numpy as np
 import soundfile as sf
 import logging
@@ -140,80 +144,18 @@ async def login(response: Response, username: str = Form(...), password: str = F
     db_user = result.scalars().first()
     if db_user and verify_password(password, db_user.password):
         token = create_jwt_token(username)
-        response = JSONResponse(
-                    content={"username": db_user.username, "user_id": db_user.id},
-                    status_code=200
-                ) 
-        response.set_cookie(key="access_token", value=token, httponly=False, secure=False, samesite="Lax")
-        return response
+        redirect_response = RedirectResponse(url="/", status_code=303)
+        redirect_response.set_cookie(
+            key="access_token",
+            value=token,
+            httponly=False,
+            secure=False,
+            samesite="Lax"
+        )
+        return redirect_response
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
-# ───── WebSocket Endpoint ──────────────────────────────────
-@app.websocket("/voice_chat")
-async def voice_chat(websocket: WebSocket, db: Session = Depends(get_db)):
-    await websocket.accept()
-    logger.info("🔗 WebSocket connected")
 
-    audio_data = b""
-    recording = False
-    lead_id = None
-    try:
-        while True:
-            try:
-                # import ipdb;ipdb.set_trace()
-
-                message = await websocket.receive()
-
-                if "text" in message:
-                    try:
-                        data = json.loads(message["text"])
-                        if data.get("type") == "start_conversation":
-                            lead_id = data.get("user_id")
-                            if not lead_id:
-                                return
-                            logger.info(f"🟢 Conversation started With {lead_id}")
-                            recording = True
-                            audio_data = b""
-                        elif data.get("type") == "end_conversation":
-                            logger.info("🔴 Conversation ended")
-                            recording = False
-                            if audio_data:
-                                save_pcm_to_wav(audio_data, filename='final_audio.wav', sample_rate=44100)
-                                logger.info("✅ Final audio saved")
-                                audio_data = b""
-                    except json.JSONDecodeError:
-                        logger.warning("⚠️ Invalid JSON message")
-
-                elif "bytes" in message:
-                    data = message["bytes"]
-                    logger.info(f"📥 Received {len(data)} lead {lead_id} bytes, first 10 bytes: {data[:10]}")
-                    if recording:
-                        if len(data) % 2 != 0:
-                            logger.warning("⚠️ Skipping invalid chunk due to odd byte count")
-                            continue
-                        audio_data += data
-
-            except WebSocketDisconnect:
-                logger.info("🚪 Client disconnected")
-                break
-            except Exception as e:
-                logger.error(f"❌ WebSocket error: {e}")
-                break
-
-    finally:
-        if recording and audio_data:
-            save_pcm_to_wav(audio_data, filename='final_audio.wav', sample_rate=44100)
-            logger.info("✅ Final audio saved on disconnect")
-
-        await db.close()
-
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
-
-# ───── Audio Saving Utility ─────────────────────────────────
-def save_pcm_to_wav(pcm_data, filename="received_audio.wav", sample_rate=44100):
-    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
-    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
 
 # ───── App Startup ──────────────────────────────────────────
 @app.on_event("startup")
@@ -223,6 +165,140 @@ async def startup():
         logger.info("🚀 Database initialized")
     except Exception as e:
         logger.error(f"❌ DB startup failed: {e}")
+
+
+import time
+import numpy as np
+import soundfile as sf
+
+# ───── Audio Saving Utility ─────────────────────────────────
+def save_pcm_to_wav(pcm_data, filename="received_audio.wav", sample_rate=44100):
+    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
+
+
+
+
+import numpy as np
+import soundfile as sf
+import librosa
+
+
+def save_pcm_to_wav(pcm_data, filename="received_audio.wav", sample_rate=44100):
+    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
+
+def save_pcm_to_wav_16(pcm_data, filename="received_audio_16.wav", sample_rate=16000):
+    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
+
+import numpy as np
+import soundfile as sf
+import librosa
+import datetime
+import json
+import traceback
+
+
+# ==========================
+# Audio Handling Functions
+# ==========================
+
+
+def save_pcm_to_wav(pcm_data, filename="received_audio.wav", sample_rate=44100):
+    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
+
+# ==========================
+# WebSocket Handler
+# ==========================
+
+SILENCE_TIMEOUT = 1  # seconds
+
+@app.websocket("/voice_chat")
+async def voice_chat(websocket: WebSocket, db: Session = Depends(get_db)):
+    await websocket.accept()
+    logger.info("🔗 WebSocket connected")
+
+    lead_id = None
+    audio_data = b''
+    last_chunk_time = datetime.datetime.now()
+
+    try:
+        while True:
+            try:
+                message = await websocket.receive()
+
+                # Handle text messages
+                if "text" in message and message["text"]:
+                    try:
+                        data = json.loads(message["text"])
+
+                        if data.get("type") == "start_conversation":
+                            lead_id = data.get("user_id")
+                            if not lead_id:
+                                logger.warning("⚠️ Missing user_id in start_conversation")
+                                return
+                            logger.info(f"🟢 Conversation started with {lead_id}")
+
+                        elif data.get("type") == "end_conversation":
+                            logger.info("🔴 Conversation ended by client")
+                            # transcription = await transcribe_with_faster_whisper(b"")
+                            # await websocket.send_json({"type": "transcription", "text": transcription})
+                            break
+
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ JSON decoding failed: {message['text']}")
+                        continue  # Skip malformed message
+
+                # Handle audio chunks
+                elif "bytes" in message:
+                    chunk = message["bytes"]
+
+                    if len(chunk) % 2 != 0:
+                        logger.warning("⚠️ Skipping invalid chunk due to odd byte count")
+                        continue
+
+                    audio_data += chunk
+                    logger.info(f"🎙️ Received chunk - Raw: {len(chunk)} bytes")
+
+                    last_chunk_time = datetime.datetime.now()
+
+                # Handle silence timeout
+                if (datetime.datetime.now() - last_chunk_time) > datetime.timedelta(seconds=SILENCE_TIMEOUT):
+                    if audio_data:
+                        logger.info("⏳ Silence detected, sending accumulated audio data for final transcription.")
+
+                        # Save audio with timestamped filename
+                        base_filename = f"audio_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        logger.info(f"💾 Saving audio with base filename: {base_filename}")
+                        save_pcm_to_wav(audio_data)
+
+                        # Transcribe and send result
+                        transcription = await transcribe_with_faster_whisper(audio_data)
+                        logger.info(f"📝 Transcription: {transcription}")
+                        await websocket.send_json({"type": "transcription", "text": transcription})
+
+                        # Reset audio data
+                        audio_data = b''
+                    
+                    last_chunk_time = datetime.datetime.now()
+
+            except WebSocketDisconnect:
+                logger.info("🚪 Client disconnected")
+                break
+
+            except Exception as e:
+                logger.error(f"❌ WebSocket error: {e}\n{traceback.format_exc()}")
+                break
+
+    finally:
+        await db.close()
+        if websocket.application_state != WebSocketState.DISCONNECTED:
+            await websocket.close()
+
+
+
 
 # ───── Entry Point ──────────────────────────────────────────
 if __name__ == "__main__":

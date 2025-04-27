@@ -11,9 +11,40 @@ from scipy.io.wavfile import read
 import noisereduce as nr
 from gtts import gTTS
 
+import soundfile as sf
+
+import whisper
+import tempfile
+import numpy as np
+import soundfile as sf
+
+# Set the device to CUDA if available, otherwise fallback to CPU
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Load Whisper model (base model for transcription)
 model = whisper.load_model("base").to(device)
+
+# Function for transcribing with faster-whisper
+async def transcribe_with_faster_whisper(pcm_bytes: bytes, sample_rate: int = 44100) -> str:
+    """Transcribe audio using faster-whisper."""
+    
+    # Write the PCM data to a temporary WAV file
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as f:
+        # Convert PCM bytes to numpy array
+        audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
+        
+        # Write the PCM data as WAV to the temporary file
+        sf.write(f.name, audio_np, sample_rate, format='WAV')
+
+        # Perform transcription using the Whisper model
+        result = model.transcribe(f.name, language='en')
+        
+        # Return the transcribed text
+        return result["text"]
+
+
+
+
 
 async def text_to_speech(text):
     try:
@@ -36,6 +67,9 @@ async def text_to_speech(text):
         print(f"Error occurred during text-to-speech conversion: {e}")
         return None
 
+
+
+
 def process_audio_stream(audio_bytes):
     print("📥 Starting audio stream processing...")
 
@@ -44,7 +78,7 @@ def process_audio_stream(audio_bytes):
     print(f"🎚️ Sample Rate: {sample_rate}, Audio Shape: {audio_data.shape}")
 
     try:
-        audio_tensor = torch.tensor(audio_data, dtype=torch.float32).to(device) / 32768.0
+        audio_tensor = torch.from_numpy(np.frombuffer(audio_data, dtype=np.int16).copy()).float() / 32768.0
         audio_tensor = whisper.pad_or_trim(audio_tensor)
         print(f"🔁 Padded/Trimmed Tensor Shape: {audio_tensor.shape}")
 

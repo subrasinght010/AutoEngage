@@ -1,7 +1,7 @@
 import whisper
 
 # Load the Whisper model
-model = whisper.load_model("base")  # You can choose "base", "small", "medium", "large" based on your hardware
+model = whisper.load_model("medium")  # You can choose "base", "small", "medium", "large" based on your hardware
 
 # Function to transcribe audio file
 def transcribe_audio(file_path):
@@ -10,7 +10,7 @@ def transcribe_audio(file_path):
     return result['text']
 
 # Example usage
-audio_file_path = "/Users/subrat/Desktop/Agent/AutoEngage/final_audio.wav"  # Replace with your audio file path
+audio_file_path = "/Users/subrat/Desktop/Agent/AutoEngage/received_audio.wav"  # Replace with your audio file path
 transcribed_text = transcribe_audio(audio_file_path)
 
 print(f"Transcribed Text: {transcribed_text}")
