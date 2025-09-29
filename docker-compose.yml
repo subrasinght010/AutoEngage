@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  chroma:
+    image: mcp/chroma:latest
+    container_name: chroma_db
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - /Users/subrat/Desktop/Agent/cromadb:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=TRUE
+
+volumes:
+  chroma_data:

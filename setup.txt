@@ -1,0 +1,6 @@
+unzip calling-support-system.zip
+cd calling-support-system
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+python main.py
