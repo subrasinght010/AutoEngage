@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Voice Chat</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
+  <style>
+    body {
+      background: radial-gradient(ellipse at top left, #1a1a2e, #16213e 70%);
+      color: #f0f0f0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow-x: hidden;
+    }
+
+    .status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 30px;
+      background-color: #111827;
+      font-size: 1rem;
+      font-weight: 500;
+      border-bottom: 1px solid #2d2d2d;
+    }
+
+    .circle-container {
+      display: flex;
+      justify-content: center;
+      gap: 25px;
+      margin-top: 20px;
+      height: 120px;
+      align-items: flex-end;
+    }
+
+    .circle {
+      width: 20px;
+      height: 20px;
+      background: linear-gradient(135deg, #34d399, #3b82f6);
+      border-radius: 50%;
+      box-shadow: 0 0 10px #34d39988;
+      transform: translateY(0);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .circle.animate {
+      animation: float 1.2s ease-in-out infinite;
+      box-shadow: 0 0 15px 5px rgba(59, 130, 246, 0.5), 0 0 30px 10px rgba(52, 211, 153, 0.3);
+    }
+
+    .circle:nth-child(2).animate { animation-delay: 0.1s; }
+    .circle:nth-child(3).animate { animation-delay: 0.2s; }
+    .circle:nth-child(4).animate { animation-delay: 0.3s; }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-30px) scale(1.2); }
+    }
+
+    .btn {
+      padding: 12px 24px;
+      border-radius: 9999px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+
+    .btn:hover {
+      transform: scale(1.05);
+    }
+
+    .start-btn { background-color: #34d399; color: white; }
+    .stop-btn { background-color: #f87171; color: white; }
+    .mute-btn { background-color: #fbbf24; color: white; }
+    .btn:disabled { background-color: #6b7280; cursor: not-allowed; }
+
+    h1 {
+      text-align: center;
+      font-size: 2rem;
+      margin-top: 2rem;
+    }
+
+    /* Glowing background effect */
+    body::before {
+      content: "";
+      position: fixed;
+      top: -100px;
+      left: -100px;
+      width: 300%;
+      height: 300%;
+      background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(52,211,153,0.08) 60%);
+      filter: blur(100px);
+      z-index: -1;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="status-bar">
+    <div class="font-bold text-lg">👤 Username: <span id="username">guest</span></div>
+    <div class="flex items-center gap-2">
+      <span>Status:</span>
+      <span id="status" class="text-green-400 transition-all">Not Connected</span>
+    </div>
+  </div>
+
+  <div class="flex flex-col items-center justify-center min-h-[80vh] space-y-8">
+    <h1>🎤 Real-Time Voice Chat</h1>
+
+    <div class="flex gap-4">
+      <button id="start" class="btn start-btn">
+        <i data-lucide="phone-call" class="w-5 h-5"></i> Start
+      </button>
+      <button id="stop" class="btn stop-btn" disabled>
+        <i data-lucide="phone-off" class="w-5 h-5"></i> Stop
+      </button>
+      <button id="mute" class="btn mute-btn">
+        <i data-lucide="mic-off" class="w-5 h-5"></i> Mute
+      </button>
+    </div>
+
+    <!-- Live indicator -->
+    <div class="flex items-center gap-2 mt-4 text-green-400 text-lg" id="live-label" style="display:none;">
+      <span class="animate-ping h-3 w-3 rounded-full bg-green-400 opacity-75"></span>
+      <span>Speaking...</span>
+    </div>
+
+    <!-- Floating circles -->
+    <div id="circle-container" class="circle-container">
+      <div class="circle" id="circle1"></div>
+      <div class="circle" id="circle2"></div>
+      <div class="circle" id="circle3"></div>
+      <div class="circle" id="circle4"></div>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+    const userId = "guest";
+    document.getElementById("username").textContent = userId;
+
+    let socket, audioContext, micStream, audioWorkletNode, micVAD, pingInterval;
+    let isMuted = false;
+    let speechActive = false;
+
+    function updateStatus(text, color = 'text-green-400') {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = text;
+      statusEl.className = color + ' transition-all';
+    }
+
+    function startPing() {
+      pingInterval = setInterval(() => {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 20000);
+    }
+
+    function stopPing() {
+      clearInterval(pingInterval);
+    }
+
+    function openWebSocket() {
+      socket = new WebSocket("wss://8nmwbg89-8080.inc1.devtunnels.ms/voice_chat");
+      socket.binaryType = "arraybuffer";
+
+      socket.onopen = () => {
+        updateStatus("Connected", "text-blue-400");
+        document.getElementById("start").disabled = false;
+        document.getElementById("stop").disabled = false;
+      };
+      socket.onclose = () => {
+        updateStatus("Disconnected", "text-red-400");
+        document.getElementById("start").disabled = false;
+        document.getElementById("stop").disabled = true;
+        stopPing();
+      };
+      socket.onerror = () => {
+        updateStatus("Connection Error", "text-yellow-400");
+        stopPing();
+      };
+      socket.onmessage = async (event) => {
+        const audioBlob = new Blob([event.data], { type: "audio/wav" });
+        const audioURL = URL.createObjectURL(audioBlob);
+        new Audio(audioURL).play();
+      };
+    }
+
+    async function waitForSocketConnection() {
+      return new Promise(resolve => {
+        const check = setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 100);
+      });
+    }
+
+    async function startVAD() {
+      micVAD = await vad.MicVAD.new({
+        onSpeechStart: () => {
+          if (!speechActive) {
+            speechActive = true;
+            document.querySelectorAll('.circle').forEach(c => c.classList.add('animate'));
+            document.getElementById("live-label").style.display = "flex";
+            updateStatus("Live", "text-green-400");
+          }
+        },
+        onSpeechEnd: () => {
+          speechActive = false;
+          document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+          document.getElementById("live-label").style.display = "none";
+          updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
+        }
+      });
+      await micVAD.start();
+    }
+
+    async function startAudioStream() {
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      if (!socket || socket.readyState === WebSocket.CLOSED) {
+        openWebSocket();
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      await waitForSocketConnection();
+      socket.send(JSON.stringify({ type: "start_conversation", user_id: userId }));
+
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext();
+
+      const workletBlob = new Blob([`
+        class PCMWorkletProcessor extends AudioWorkletProcessor {
+          process(inputs) {
+            const input = inputs[0][0];
+            if (!input) return true;
+            const pcm = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+              let s = Math.max(-1, Math.min(1, input[i]));
+              pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            this.port.postMessage(pcm.buffer, [pcm.buffer]);
+            return true;
+          }
+        }
+        registerProcessor('pcm-worklet', PCMWorkletProcessor);
+      `], { type: "application/javascript" });
+
+      const workletURL = URL.createObjectURL(workletBlob);
+      await audioContext.audioWorklet.addModule(workletURL);
+
+      const micSource = audioContext.createMediaStreamSource(micStream);
+      audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
+
+      audioWorkletNode.port.onmessage = (event) => {
+        if (!isMuted && socket?.readyState === WebSocket.OPEN) {
+          socket.send(event.data);
+        }
+      };
+
+      micSource.connect(audioWorkletNode).connect(audioContext.destination);
+
+      await startVAD();
+      startPing();
+    }
+
+    async function stopAudioStream() {
+      document.getElementById("start").disabled = false;
+      document.getElementById("stop").disabled = true;
+
+      if (audioWorkletNode) audioWorkletNode.disconnect();
+      if (audioContext) await audioContext.close();
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (micVAD) await micVAD.pause();
+
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "end_conversation" }));
+      }
+
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+
+      document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+      document.getElementById("live-label").style.display = "none";
+      updateStatus("Disconnected", "text-red-400");
+      stopPing();
+    }
+
+    document.getElementById("start").addEventListener("click", startAudioStream);
+    document.getElementById("stop").addEventListener("click", stopAudioStream);
+
+    document.getElementById("mute").addEventListener("click", () => {
+      isMuted = !isMuted;
+      const muteBtn = document.getElementById("mute");
+      muteBtn.innerHTML = isMuted
+        ? `<i data-lucide="mic" class="w-5 h-5"></i> Unmute`
+        : `<i data-lucide="mic-off" class="w-5 h-5"></i> Mute`;
+      updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
+      lucide.createIcons();
+    });
+  </script>
+
+</body>
+</html>
