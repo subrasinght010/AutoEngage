@@ -51,7 +51,7 @@ from nodes.tts_node import tts_node
 
 from tools.db_client import get_lead_by_id, get_leads_for_followup
 from backend.ai_core.text_n_speech import transcribe_with_faster_whisper
-from backend.utilities import handle_call, hash_password, verify_password
+from backend.utilities import  hash_password, verify_password
 from backend.curd import get_user_by_username
 
 from database.db_setup import get_db, init_db
