@@ -2,15 +2,12 @@
 import os
 import sys
 import json
-import time
-import traceback
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import numpy as np
 import soundfile as sf
-import librosa  # if used elsewhere
 from dotenv import load_dotenv
 
 import jwt
@@ -26,7 +23,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,7 +33,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import Session
 
 # Project imports (kept names from your original)
 from state.workflow_state import WorkflowState, lead_reducer
@@ -50,11 +46,11 @@ from nodes.stt_node import stt_node
 from nodes.tts_node import tts_node
 
 from tools.db_client import get_lead_by_id, get_leads_for_followup
-from backend.ai_core.text_n_speech import transcribe_with_faster_whisper
-from backend.utilities import  hash_password, verify_password
-from backend.curd import get_user_by_username
+from tools.stt import transcribe_with_faster_whisper
+from utils.utilities import  hash_password, verify_password
+from database.crud import DBManager
 
-from database.db_setup import get_db, init_db
+from database.db import get_db, init_db
 from database.models import User
 
 # -------------------------
@@ -96,7 +92,7 @@ app.add_middleware(
 # Auth utilities
 # -------------------------
 def create_jwt_token(username: str, expires_hours: int = 1) -> str:
-    exp = datetime.utcnow() + timedelta(hours=expires_hours)
+    exp = datetime.now() + timedelta(hours=expires_hours)
     payload = {"sub": username, "exp": exp.isoformat()}
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return token
@@ -126,16 +122,10 @@ async def require_auth(request: Request):
 # -------------------------
 # Audio helpers (kept both; clear names)
 # -------------------------
-def save_pcm_to_wav_44k(pcm_data: bytes, filename: str = "received_audio.wav", sample_rate: int = 44100) -> None:
+def save_pcm_to_wav(pcm_data: bytes, filename: str = "received_audio.wav", sample_rate: int = 16000) -> None:
     """
-    Save 16-bit PCM bytes to a WAV file at 44.1 kHz
-    """
-    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
-    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
-
-def save_pcm_to_wav_16k(pcm_data: bytes, filename: str = "received_audio_16.wav", sample_rate: int = 16000) -> None:
-    """
-    Save 16-bit PCM bytes to a WAV file at 16 kHz
+    Save 16-bit PCM bytes to a WAV file at the specified sample rate.
+    Default is 44.1 kHz.
     """
     audio_array = np.frombuffer(pcm_data, dtype=np.int16)
     sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
@@ -171,7 +161,7 @@ async def home_page(
     if isinstance(user, RedirectResponse):
         return user
 
-    user_obj = await get_user_by_username(db=db, username=user)
+    user_obj = await DBManager().get_user_by_username(db=db, username=user)
     if not user_obj:
         return HTMLResponse("User not found", status_code=404)
 
@@ -191,7 +181,6 @@ async def signup(
 ):
     if password != confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
-
     result = await db.execute(select(User).where(User.username == username))
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -236,11 +225,11 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 def auto_followups():
-    logger.info("⏰ Running auto-followups...")
+    print("⏰ Running auto-followups...")
     try:
         leads = get_leads_for_followup()  # synchronous helper per your codebase
     except Exception as e:
-        logger.error(f"Failed to fetch leads for followup: {e}")
+        print(f"Failed to fetch leads for followup: {e}")
         return
 
     for lead in leads:
@@ -249,7 +238,7 @@ def auto_followups():
             continue
 
         try:
-            logger.info(f"➡️ Processing lead {lead_id}")
+            print(f"➡️ Processing lead {lead_id}")
             state_updates = {
                 "lead_id": lead_id,
                 "lead_data": lead,
@@ -273,7 +262,7 @@ def auto_followups():
             _ = db_update_node(state)
 
         except Exception as e:
-            logger.exception(f"⚠️ Error processing lead {lead_id}: {e}")
+            print(f"⚠️ Error processing lead {lead_id}: {e}")
 
 # schedule every 1 minute
 scheduler.add_job(auto_followups, 'interval', minutes=1)
@@ -292,41 +281,41 @@ async def handle_incoming(message_data: Dict[str, Any]) -> WorkflowState:
     # STT processing for voice
     if channel in ["call", "voice"] and voice_file_url:
         try:
-            logger.info(f"🎤 Running STT for audio: {voice_file_url}")
+            print(f"🎤 Running STT for audio: {voice_file_url}")
             state = stt_node(state, voice_file_url)
         except Exception as e:
-            logger.exception(f"⚠️ STT error: {e}")
+            print(f"⚠️ STT error: {e}")
 
     # LLM intent detection
     try:
         state = intent_detector_llm(state)
     except Exception as e:
-        logger.exception(f"⚠️ Intent detection error: {e}")
+        print(f"⚠️ Intent detection error: {e}")
 
     # Communication agent
     try:
         state = communication_agent(state)
     except Exception as e:
-        logger.exception(f"⚠️ Communication agent error: {e}")
+        print(f"⚠️ Communication agent error: {e}")
 
     # DB logging
     try:
         state = db_update_node(state)
     except Exception as e:
-        logger.exception(f"⚠️ DB update error: {e}")
+        print(f"⚠️ DB update error: {e}")
 
     # Schedule next steps
     try:
         state = schedule_call_node(state)
     except Exception as e:
-        logger.exception(f"⚠️ Scheduling error: {e}")
+        print(f"⚠️ Scheduling error: {e}")
 
     # TTS for voice channels
     if channel in ["call", "voice"]:
         try:
             state = tts_node(state)
         except Exception as e:
-            logger.exception(f"⚠️ TTS error: {e}")
+            print(f"⚠️ TTS error: {e}")
 
     return state
 
@@ -401,11 +390,11 @@ SILENCE_TIMEOUT = 1  # seconds
 @app.websocket("/voice_chat")
 async def voice_chat(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     await websocket.accept()
-    logger.info("🔗 WebSocket connected")
+    print("🔗 WebSocket connected")
 
     lead_id: Optional[str] = None
     audio_data = b''
-    last_chunk_time = datetime.utcnow()
+    last_chunk_time = datetime.now()
 
     try:
         while True:
@@ -417,58 +406,58 @@ async def voice_chat(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
                     try:
                         data = json.loads(message["text"])
                     except json.JSONDecodeError:
-                        logger.error(f"❌ JSON decoding failed: {message['text']}")
+                        print(f"❌ JSON decoding failed: {message['text']}")
                         continue
 
                     msg_type = data.get("type")
                     if msg_type == "start_conversation":
                         lead_id = data.get("user_id")
                         if not lead_id:
-                            logger.warning("⚠️ Missing user_id in start_conversation")
+                            print("⚠️ Missing user_id in start_conversation")
                             await websocket.close()
                             return
-                        logger.info(f"🟢 Conversation started with {lead_id}")
+                        print(f"🟢 Conversation started with {lead_id}")
 
                     elif msg_type == "end_conversation":
-                        logger.info("🔴 Conversation ended by client")
+                        print("🔴 Conversation ended by client")
                         break
 
                 # Audio binary frames
                 elif isinstance(message, dict) and "bytes" in message:
                     chunk = message["bytes"]
                     if len(chunk) % 2 != 0:
-                        logger.warning("⚠️ Skipping invalid chunk due to odd byte count")
+                        print("⚠️ Skipping invalid chunk due to odd byte count")
                         continue
                     audio_data += chunk
-                    logger.info(f"🎙️ Received chunk - Raw: {len(chunk)} bytes")
-                    last_chunk_time = datetime.utcnow()
+                    print(f"🎙️ Received chunk - Raw: {len(chunk)} bytes")
+                    last_chunk_time = datetime.now()
 
                 # Silence timeout handling
-                if (datetime.utcnow() - last_chunk_time).total_seconds() > SILENCE_TIMEOUT:
+                if (datetime.now() - last_chunk_time).total_seconds() > SILENCE_TIMEOUT:
                     if audio_data:
-                        base_filename = f"audio_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.wav"
-                        logger.info(f"💾 Saving audio with filename: {base_filename}")
+                        base_filename = f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                        print(f"💾 Saving audio with filename: {base_filename}")
                         # Save using 16k (if you prefer 44k, change to save_pcm_to_wav_44k)
-                        save_pcm_to_wav_16k(audio_data, filename=base_filename)
+                        save_pcm_to_wav(audio_data, filename=base_filename)
                         # Transcribe
                         try:
                             transcription = await transcribe_with_faster_whisper(audio_data)
-                            logger.info(f"📝 Transcription: {transcription}")
+                            print(f"📝 Transcription: {transcription}")
                             await websocket.send_json({"type": "transcription", "text": transcription})
                         except Exception as e:
-                            logger.exception(f"❌ Transcription failed: {e}")
+                            print(f"❌ Transcription failed: {e}")
 
                         # Reset buffer
                         audio_data = b''
 
-                    last_chunk_time = datetime.utcnow()
+                    last_chunk_time = datetime.now()
 
             except WebSocketDisconnect:
-                logger.info("🚪 Client disconnected")
+                print("🚪 Client disconnected")
                 break
 
             except Exception as e:
-                logger.exception(f"❌ WebSocket error: {e}")
+                print(f"❌ WebSocket error: {e}")
                 break
 
     finally:
@@ -492,9 +481,9 @@ async def voice_chat(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
 async def startup_event():
     try:
         await init_db()
-        logger.info("🚀 Database initialized")
+        print("🚀 Database initialized")
     except Exception as e:
-        logger.exception(f"❌ DB startup failed: {e}")
+        print(f"❌ DB startup failed: {e}")
 
 # -------------------------
 # Main entry (single uvicorn invocation)

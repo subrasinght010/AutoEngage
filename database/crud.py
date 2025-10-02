@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from .models import Lead, Conversation
+from .models import Lead, Conversation, User
 from tools.vector_store import add_embedding , query_embeddings  # our Chroma helper
 
 class DBManager:
@@ -23,6 +23,10 @@ class DBManager:
 
     async def get_lead_by_email(self, email: str):
         result = await self.session.execute(select(Lead).filter_by(email=email))
+        return result.scalar_one_or_none()
+    
+    async def get_user_by_username(self, username: str):
+        result = await self.session.execute(select(User).filter_by(username=username))
         return result.scalar_one_or_none()
 
     # -----------------------------

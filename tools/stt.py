@@ -1,117 +1,104 @@
 import asyncio
-from asyncio.log import logger
-import whisper
-import numpy as np
 import io
+import tempfile
 import torch
-import tempfile
-import pygame
-import subprocess
-from scipy.io.wavfile import read
-import noisereduce as nr
-from gtts import gTTS
-
-import soundfile as sf
-
-import whisper
-import tempfile
 import numpy as np
 import soundfile as sf
+import whisper
+import os
 
-# Set the device to CUDA if available, otherwise fallback to CPU
+# -------------------------------
+# Device and Model
+# -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
+model = whisper.load_model("medium").to(device)  # Use 'cpu' or 'cuda'
 
-# Load Whisper model (base model for transcription)
-model = whisper.load_model("base").to(device)
-
-# Function for transcribing with faster-whisper
-async def transcribe_with_faster_whisper(pcm_bytes: bytes, sample_rate: int = 44100) -> str:
-    """Transcribe audio using faster-whisper."""
-    
-    # Write the PCM data to a temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as f:
-        # Convert PCM bytes to numpy array
-        audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
-        
-        # Write the PCM data as WAV to the temporary file
-        sf.write(f.name, audio_np, sample_rate, format='WAV')
-
-        # Perform transcription using the Whisper model
-        result = model.transcribe(f.name, language='en')
-        
-        # Return the transcribed text
-        return result["text"]
-
-
-
-
-
-async def text_to_speech(text):
+# -------------------------------
+# Utilities
+# -------------------------------
+async def ensure_pcm_bytes(audio_bytes: bytes, target_rate: int = 16000) -> bytes:
+    """Ensure audio bytes are PCM16 at target sample rate."""
     try:
-        tts = gTTS(text=text, lang="en")
-        audio_stream = io.BytesIO()
-        tts.write_to_fp(audio_stream)
-        audio_stream.seek(0)
-
-        pygame.mixer.init()
-        pygame.mixer.music.load(audio_stream, "mp3")
-        pygame.mixer.music.play()
-
-        while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)
-
-        audio_stream.seek(0)
-        return audio_stream.read()
-
-    except Exception as e:
-        print(f"Error occurred during text-to-speech conversion: {e}")
-        return None
-
-
-
-
-def process_audio_stream(audio_bytes):
-    print("📥 Starting audio stream processing...")
-
-    audio_buffer = io.BytesIO(audio_bytes)
-    sample_rate, audio_data = read(audio_buffer)
-    print(f"🎚️ Sample Rate: {sample_rate}, Audio Shape: {audio_data.shape}")
+        arr = np.frombuffer(audio_bytes, dtype=np.int16)
+        if arr.ndim > 1:
+            arr = arr[:, 0]
+        return arr.tobytes()
+    except Exception:
+        pass
 
     try:
-        audio_tensor = torch.from_numpy(np.frombuffer(audio_data, dtype=np.int16).copy()).float() / 32768.0
-        audio_tensor = whisper.pad_or_trim(audio_tensor)
-        print(f"🔁 Padded/Trimmed Tensor Shape: {audio_tensor.shape}")
+        audio_np, sr = sf.read(io.BytesIO(audio_bytes))
+        if audio_np.ndim > 1:
+            audio_np = audio_np[:, 0]
 
-        mel = whisper.log_mel_spectrogram(audio_tensor).to(device)
-        print(f"📊 Mel Spectrogram Shape: {mel.shape}")
+        if sr != target_rate:
+            import librosa
+            audio_np = librosa.resample(audio_np.astype(np.float32), orig_sr=sr, target_sr=target_rate)
+            audio_np = (audio_np * 32767).astype(np.int16)
+        elif audio_np.dtype != np.int16:
+            audio_np = (audio_np * 32767).astype(np.int16)
 
-        result = model.transcribe(mel, language="hi")
-        print(f"📝 Transcription Result: {result}")
-
-        return result.get("text", "")
+        return audio_np.tobytes()
     except Exception as e:
-        print(f"❌ Error in process_audio_stream: {e}")
-        return ""
-
-
-async def denoise_audio(audio_bytes: bytes) -> bytes:
-    try:
-        if not audio_bytes or len(audio_bytes) < 2048:
-            logger.warning("⚠️ Skipping denoise due to small or empty chunk")
-            return audio_bytes
-
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-
-        if np.all(audio_np == 0) or np.max(np.abs(audio_np)) < 100:
-            logger.info("🔇 Skipping denoise for silent/low-energy audio")
-            return audio_bytes
-
-        reduced_noise = nr.reduce_noise(y=audio_np, sr=16000)
-        return reduced_noise.astype(np.int16).tobytes()
-
-    except Exception as e:
-        logger.error(f"❌ Error during noise reduction: {e}")
+        print(f"❌ Failed to convert to PCM16: {e}")
         return audio_bytes
 
+# -------------------------------
+# Save Processed Audio
+# -------------------------------
+def save_processed_audio(audio_bytes: bytes, filename: str, sample_rate: int = 16000):
+    """Save PCM16 audio bytes to WAV."""
+    try:
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        sf.write(filename, audio_np, sample_rate)
+        print(f"💾 Saved audio: {filename}")
+    except Exception as e:
+        print(f"❌ Error saving audio: {e}")
+
+# -------------------------------
+# Transcription
+# -------------------------------
+async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 16000, save_path: str = None) -> str:
+    """Transcribe audio bytes using Whisper. Optionally save audio."""
+    try:
+        # Ensure PCM16
+        pcm_bytes = await ensure_pcm_bytes(audio_bytes, sample_rate)
+
+        # Save processed file if path provided
+        if save_path:
+            save_processed_audio(pcm_bytes, save_path, sample_rate)
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_file:
+            audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
+            sf.write(tmp_file.name, audio_np, sample_rate)
+            result = model.transcribe(tmp_file.name, language="en")
+            return result.get("text", "")
+    except Exception as e:
+        print(f"❌ Transcription error: {e}")
+        return ""
+
+# -------------------------------
+# Test Speech-to-Text
+# -------------------------------
+async def test_speech_to_text():
+    """Test speech-to-text with a sample WAV file."""
+    try:
+        sample_file = "/Users/subrat/Desktop/Agent/audio_20250930_210337_44k.wav"
+        save_file = "/Users/subrat/Desktop/Agent/audio_data/audio_20250930_212355.wav"
+
+        audio_np, sr = sf.read(sample_file, dtype="int16")
+        print(f"🎚️ Loaded sample audio: {sample_file}, Sample Rate: {sr}, Shape: {audio_np.shape}")
+
+        pcm_bytes = audio_np.tobytes()
+        transcription = await transcribe_with_faster_whisper(pcm_bytes, sample_rate=sr, save_path=save_file)
+        print(f"📝 Transcription Result: {transcription}")
+
+    except Exception as e:
+        print(f"❌ Error in test_speech_to_text: {e}")
+
+# -------------------------------
+# Run Test
+# -------------------------------
 if __name__ == "__main__":
-    asyncio.run(text_to_speech("Patani, kuch tts kaam ni kar rai, kyu ki Hindi me akshay kaam ni kar te English language me akshay kaam par rai, dey ar working good in English language, but they are not able to work in Hindi language. So please suggest me some other tts model which work on really well on the Hindi language. Mainly I focus on the English, which is the English and the combination. Thank you"))
+    asyncio.run(test_speech_to_text())
