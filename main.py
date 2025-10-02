@@ -1,13 +1,10 @@
 # main.py (CLEANED & MERGED)
+import asyncio
 import os
-import sys
 import json
-import logging
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Any
 
-import numpy as np
-import soundfile as sf
 from dotenv import load_dotenv
 
 import jwt
@@ -29,7 +26,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocketState
 
-from apscheduler.schedulers.background import BackgroundScheduler
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -46,12 +42,13 @@ from nodes.stt_node import stt_node
 from nodes.tts_node import tts_node
 
 from tools.db_client import get_lead_by_id, get_leads_for_followup
-from tools.stt import transcribe_with_faster_whisper
-from utils.utilities import  hash_password, verify_password
+from utils.utilities import  AudioValidator, check_silence_loop, handle_audio_chunk, handle_text_message, hash_password, process_audio, verify_password
 from database.crud import DBManager
 
 from database.db import get_db, init_db
 from database.models import User
+from contextlib import asynccontextmanager
+
 
 # -------------------------
 # Load env & constants
@@ -64,7 +61,17 @@ ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 # -------------------------
 # FastAPI app
 # -------------------------
-app = FastAPI(title="Multi-Agent Communication System")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        await init_db()
+        print("🚀 Database initialized")
+        yield
+    finally:
+        # Optional shutdown logic
+        print("🛑 App shutting down")
+
+app = FastAPI(title="Multi-Agent Communication System" ,lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 templates = Jinja2Templates(directory="frontend/templates")
 
@@ -80,43 +87,62 @@ app.add_middleware(
 # Auth utilities
 # -------------------------
 def create_jwt_token(username: str, expires_hours: int = 1) -> str:
-    exp = datetime.now() + timedelta(hours=expires_hours)
-    payload = {"sub": username, "exp": exp.isoformat()}
+    exp = datetime.now(timezone.utc) + timedelta(hours=expires_hours)  # timezone-aware
+    payload = {"sub": username, "exp": exp}  # pyjwt accepts datetime with tzinfo
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     return token
+
 
 def verify_jwt_token(token: str) -> str:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        # payload might store exp in isoformat string; handle both cases
+        
+        # Ensure 'sub' exists
         sub = payload.get("sub")
         if not sub:
+            print("❌ Invalid token payload: missing 'sub'")
             raise HTTPException(status_code=401, detail="Invalid token payload")
+        
+        # Handle expiration safely
+        exp = payload.get("exp")
+        if exp is None:
+            print("❌ Invalid token payload: missing 'exp'")
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+
+        # Convert exp to datetime if needed
+        if isinstance(exp, int) or isinstance(exp, float):
+            exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
+        elif isinstance(exp, str):
+            # Parse ISO string if your token uses isoformat
+            exp_datetime = datetime.fromisoformat(exp)
+            if exp_datetime.tzinfo is None:
+                exp_datetime = exp_datetime.replace(tzinfo=timezone.utc)
+        else:
+            exp_datetime = exp  # assume datetime object
+
+        if datetime.now(timezone.utc) > exp_datetime:
+            print("❌ Token has expired")
+            raise HTTPException(status_code=401, detail="Token has expired")
+
         return sub
+
     except jwt.ExpiredSignatureError:
+        print("❌ Token has expired (jwt)")
         raise HTTPException(status_code=401, detail="Token has expired")
     except jwt.InvalidTokenError:
+        print("❌ Invalid token")
         raise HTTPException(status_code=401, detail="Invalid token")
+
 
 async def require_auth(request: Request):
     token = request.cookies.get("access_token")
     if not token:
+        print("❌ No access token found in cookies")
         return RedirectResponse(url="/login", status_code=303)
     try:
         return verify_jwt_token(token)
     except HTTPException:
         return RedirectResponse(url="/login", status_code=303)
-
-# -------------------------
-# Audio helpers (kept both; clear names)
-# -------------------------
-def save_pcm_to_wav(pcm_data: bytes, filename: str = "received_audio.wav", sample_rate: int = 16000) -> None:
-    """
-    Save 16-bit PCM bytes to a WAV file at the specified sample rate.
-    Default is 44.1 kHz.
-    """
-    audio_array = np.frombuffer(pcm_data, dtype=np.int16)
-    sf.write(filename, audio_array, sample_rate, subtype='PCM_16')
 
 # -------------------------
 # Routes (auth + pages)
@@ -149,7 +175,8 @@ async def home_page(
     if isinstance(user, RedirectResponse):
         return user
 
-    user_obj = await DBManager().get_user_by_username(db=db, username=user)
+    user_obj = await DBManager(session=db).get_user_by_username(username=user)
+    print(f"🏠 Home page accessed by user: {user_obj.username if user_obj else 'Unknown'}")
     if not user_obj:
         return HTMLResponse("User not found", status_code=404)
 
@@ -184,6 +211,8 @@ async def signup(
 
     return RedirectResponse(url="/login", status_code=303)
 
+
+
 @app.post("/login")
 async def login(
     response: Response,
@@ -191,20 +220,29 @@ async def login(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(User).where(User.username == username))
-    db_user = result.scalars().first()
-    if db_user and verify_password(password, db_user.password):
-        token = create_jwt_token(username)
-        redirect_response = RedirectResponse(url="/", status_code=303)
-        redirect_response.set_cookie(
-            key="access_token",
-            value=token,
-            httponly=False,
-            secure=False,
-            samesite="Lax"
-        )
-        return redirect_response
+    async with db.begin():  # Ensures proper session handling
+        result = await db.execute(select(User).where(User.username == username))
+        db_user = result.scalars().first()
+
+        print(f"🔑 Login attempt for user: {username}")
+
+        if db_user and verify_password(password, db_user.password):
+            print(f"✅ User {username} authenticated successfully")
+            token = create_jwt_token(username)
+
+            redirect_response = RedirectResponse(url="/", status_code=303)
+            redirect_response.set_cookie(
+                key="access_token",
+                value=token,
+                httponly=True,   # safer
+                secure=False,
+                samesite="Lax"
+            )
+            return redirect_response
+
+    # If we reach here, login failed
     raise HTTPException(status_code=401, detail="Invalid credentials")
+
 
 # -------------------------
 # Scheduler: auto-followups
@@ -373,105 +411,351 @@ async def trigger_outgoing(lead_id: str, channel: str = "call"):
 # -------------------------
 # WebSocket: voice_chat
 # -------------------------
-SILENCE_TIMEOUT = 1  # seconds
+SILENCE_TIMEOUT = 1.5  # seconds - adjusted for VAD buffering
+MAX_AUDIO_DURATION = 30  # seconds - prevent memory overflow
+
+
 
 @app.websocket("/voice_chat")
 async def voice_chat(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     await websocket.accept()
     print("🔗 WebSocket connected")
+    print("ℹ️ Client-side VAD handles speech detection, server validates technical quality only")
 
-    lead_id: Optional[str] = None
-    audio_data = b''
-    last_chunk_time = datetime.now()
+    # Initialize audio validator
+    validator = AudioValidator()
+    
+    # Use dicts for mutable references
+    lead_id_ref = {'value': None}
+    audio_data_ref = {'value': b''}
+    last_chunk_time_ref = {'value': datetime.now()}
+    is_receiving_ref = {'value': False}
+    silence_check_task = None
 
     try:
+        # Start silence checker task
+        silence_check_task = asyncio.create_task(
+            check_silence_loop(audio_data_ref, last_chunk_time_ref, 
+                             is_receiving_ref, websocket, validator)
+        )
+        
         while True:
+            # Check connection state
+            if websocket.application_state != WebSocketState.CONNECTED:
+                print("🚪 WebSocket no longer connected")
+                break
+            
             try:
-                message = await websocket.receive()
-
-                # Text messages (control messages in JSON)
-                if isinstance(message, dict) and "text" in message and message["text"]:
-                    try:
-                        data = json.loads(message["text"])
-                    except json.JSONDecodeError:
-                        print(f"❌ JSON decoding failed: {message['text']}")
-                        continue
-
-                    msg_type = data.get("type")
-                    if msg_type == "start_conversation":
-                        lead_id = data.get("user_id")
-                        if not lead_id:
-                            print("⚠️ Missing user_id in start_conversation")
-                            await websocket.close()
-                            return
-                        print(f"🟢 Conversation started with {lead_id}")
-
-                    elif msg_type == "end_conversation":
-                        print("🔴 Conversation ended by client")
-                        break
-
-                # Audio binary frames
-                elif isinstance(message, dict) and "bytes" in message:
-                    chunk = message["bytes"]
-                    if len(chunk) % 2 != 0:
-                        print("⚠️ Skipping invalid chunk due to odd byte count")
-                        continue
-                    audio_data += chunk
-                    print(f"🎙️ Received chunk - Raw: {len(chunk)} bytes")
-                    last_chunk_time = datetime.now()
-
-                # Silence timeout handling
-                if (datetime.now() - last_chunk_time).total_seconds() > SILENCE_TIMEOUT:
-                    if audio_data:
-                        base_filename = f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                        print(f"💾 Saving audio with filename: {base_filename}")
-                        # Save using 16k (if you prefer 44k, change to save_pcm_to_wav_44k)
-                        save_pcm_to_wav(audio_data, filename=base_filename)
-                        # Transcribe
-                        try:
-                            transcription = await transcribe_with_faster_whisper(audio_data)
-                            print(f"📝 Transcription: {transcription}")
-                            await websocket.send_json({"type": "transcription", "text": transcription})
-                        except Exception as e:
-                            print(f"❌ Transcription failed: {e}")
-
-                        # Reset buffer
-                        audio_data = b''
-
-                    last_chunk_time = datetime.now()
-
+                # Receive with timeout
+                message = await asyncio.wait_for(
+                    websocket.receive(),
+                    timeout=60.0
+                )
+                
+            except asyncio.TimeoutError:
+                print("⏰ Receive timeout - sending ping")
+                if websocket.application_state == WebSocketState.CONNECTED:
+                    stats = validator.get_stats()
+                    await websocket.send_json({"type": "ping", "stats": stats})
+                continue
+                
             except WebSocketDisconnect:
-                print("🚪 Client disconnected")
+                print("🚪 Client disconnected gracefully")
                 break
 
-            except Exception as e:
-                print(f"❌ WebSocket error: {e}")
-                break
-
-    finally:
-        try:
-            # if using AsyncSession, close it
-            if db:
+            # Handle text messages
+            if "text" in message:
                 try:
-                    await db.close()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                    data = json.loads(message["text"])
+                    should_break = await handle_text_message(
+                        data, lead_id_ref, is_receiving_ref, 
+                        last_chunk_time_ref, audio_data_ref, websocket, validator
+                    )
+                    if should_break:
+                        break
+                
+                except json.JSONDecodeError as e:
+                    print(f"❌ JSON decode error: {e}")
+                    continue
+                except Exception as e:
+                    print(f"❌ Error handling text message: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
 
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
+            # Handle binary audio data
+            elif "bytes" in message:
+                chunk = message["bytes"]
+                await handle_audio_chunk(
+                    chunk, audio_data_ref, is_receiving_ref, 
+                    last_chunk_time_ref, websocket, validator
+                )
 
-# -------------------------
-# Startup event
-# -------------------------
-@app.on_event("startup")
-async def startup_event():
-    try:
-        await init_db()
-        print("🚀 Database initialized")
+    except WebSocketDisconnect:
+        print("🚪 Client disconnected during communication")
+        
     except Exception as e:
-        print(f"❌ DB startup failed: {e}")
+        print(f"❌ Unexpected error in voice_chat: {e}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        # Cancel silence checker
+        if silence_check_task:
+            silence_check_task.cancel()
+            try:
+                await silence_check_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Process any remaining audio
+        if audio_data_ref.get('value'):
+            print("📦 Processing remaining audio buffer...")
+            try:
+                await process_audio(audio_data_ref['value'], websocket, validator)
+            except Exception as e:
+                print(f"❌ Failed to process remaining audio: {e}")
+        
+        # Print final statistics
+        final_stats = validator.get_stats()
+        print(f"📊 Session Statistics:")
+        print(f"   Total Chunks: {final_stats.get('total_received', 0)}")
+        print(f"   Valid Chunks: {final_stats.get('total_valid', 0)}")
+        print(f"   Total Data: {final_stats.get('total_bytes', 0) / 1024:.2f} KB")
+        print(f"   Validation Rate: {final_stats.get('validation_rate', 0)*100:.1f}%")
+        print(f"   Avg RMS: {final_stats.get('avg_rms', 0):.3f}")
+        print(f"   Avg Clipping: {final_stats.get('avg_clipping_rate', 0)*100:.2f}%")
+        
+        # Close database session
+        if db:
+            try:
+                await db.close()
+            except Exception as e:
+                print(f"⚠️ Error closing database: {e}")
+        
+        # Close WebSocket
+        if websocket.application_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close()
+                print("✅ WebSocket closed cleanly")
+            except Exception as e:
+                print(f"⚠️ Error closing WebSocket: {e}")
+
+# @app.websocket("/voice_chat")
+# async def voice_chat(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+#     await websocket.accept()
+#     print("🔗 WebSocket connected")
+
+#     lead_id: Optional[str] = None
+#     audio_data = b''
+#     last_chunk_time = datetime.now()
+#     is_receiving = False
+#     silence_check_task = None
+
+#     async def check_silence():
+#         """Background task to check for silence timeout"""
+#         nonlocal audio_data, last_chunk_time, is_receiving
+        
+#         while True:
+#             await asyncio.sleep(0.5)  # Check every 500ms
+            
+#             if not is_receiving:
+#                 continue
+                
+#             silence_duration = (datetime.now() - last_chunk_time).total_seconds()
+            
+#             if silence_duration > SILENCE_TIMEOUT and audio_data:
+#                 print(f"🔇 Silence detected ({silence_duration:.2f}s) - Processing audio...")
+#                 await process_audio(audio_data)
+#                 audio_data = b''
+#                 is_receiving = False
+
+#     async def process_audio(audio_bytes: bytes):
+#         """Process and transcribe audio data"""
+#         if len(audio_bytes) < 3200:  # Less than 100ms at 16kHz
+#             print("⚠️ Audio too short, skipping")
+#             return
+
+#         try:
+#             base_filename = f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+#             print(f"💾 Processing audio: {len(audio_bytes)} bytes ({len(audio_bytes) / 32000:.2f}s)")
+            
+#             # Save PCM to WAV
+#             save_pcm_to_wav(audio_bytes, filename=base_filename)
+            
+#             # Transcribe
+#             transcription = await transcribe_with_faster_whisper(audio_bytes)
+            
+#             if transcription and transcription.strip():
+#                 print(f"📝 Transcription: {transcription}")
+                
+#                 # Send transcription back to client
+#                 if websocket.application_state == WebSocketState.CONNECTED:
+#                     await websocket.send_json({
+#                         "type": "transcription",
+#                         "text": transcription,
+#                         "timestamp": datetime.now().isoformat()
+#                     })
+                    
+#                     # TODO: Generate AI response and send audio back
+#                     # response_audio = await generate_ai_response(transcription)
+#                     # await websocket.send_bytes(response_audio)
+#             else:
+#                 print("⚠️ Empty transcription")
+                
+#         except Exception as e:
+#             print(f"❌ Audio processing failed: {e}")
+#             import traceback
+#             traceback.print_exc()
+
+#     try:
+#         # Start silence checker task
+#         silence_check_task = asyncio.create_task(check_silence())
+        
+#         while True:
+#             # Check connection state before receiving
+#             if websocket.application_state != WebSocketState.CONNECTED:
+#                 print("🚪 WebSocket no longer connected")
+#                 break
+            
+#             try:
+#                 # Set timeout to prevent hanging
+#                 message = await asyncio.wait_for(
+#                     websocket.receive(),
+#                     timeout=60.0  # 60 second timeout
+#                 )
+                
+#             except asyncio.TimeoutError:
+#                 print("⏰ Receive timeout - sending ping")
+#                 if websocket.application_state == WebSocketState.CONNECTED:
+#                     await websocket.send_json({"type": "ping"})
+#                 continue
+                
+#             except WebSocketDisconnect:
+#                 print("🚪 Client disconnected gracefully")
+#                 break
+
+#             # Handle text messages (JSON control messages)
+#             if "text" in message:
+#                 try:
+#                     data = json.loads(message["text"])
+#                     msg_type = data.get("type")
+                    
+#                     if msg_type == "start_conversation":
+#                         lead_id = data.get("user_id")
+#                         if not lead_id:
+#                             print("⚠️ Missing user_id in start_conversation")
+#                             await websocket.send_json({
+#                                 "type": "error",
+#                                 "message": "user_id is required"
+#                             })
+#                             continue
+                        
+#                         print(f"🟢 Conversation started with lead: {lead_id}")
+#                         is_receiving = True
+#                         last_chunk_time = datetime.now()
+                        
+#                         await websocket.send_json({
+#                             "type": "status",
+#                             "message": "ready"
+#                         })
+                    
+#                     elif msg_type == "end_conversation":
+#                         print("🔴 End conversation requested")
+                        
+#                         # Process any remaining audio
+#                         if audio_data:
+#                             await process_audio(audio_data)
+#                             audio_data = b''
+                        
+#                         await websocket.send_json({
+#                             "type": "status",
+#                             "message": "conversation_ended"
+#                         })
+#                         break
+                    
+#                     elif msg_type == "ping":
+#                         # Respond to ping
+#                         if websocket.application_state == WebSocketState.CONNECTED:
+#                             await websocket.send_json({"type": "pong"})
+                
+#                 except json.JSONDecodeError as e:
+#                     print(f"❌ JSON decode error: {e}")
+#                     continue
+#                 except Exception as e:
+#                     print(f"❌ Error handling text message: {e}")
+#                     continue
+
+#             # Handle binary audio data
+#             elif "bytes" in message:
+#                 chunk = message["bytes"]
+                
+#                 # Validate chunk
+#                 if len(chunk) == 0:
+#                     continue
+                    
+#                 if len(chunk) % 2 != 0:
+#                     print(f"⚠️ Invalid chunk size: {len(chunk)} bytes (not 16-bit aligned)")
+#                     continue
+                
+#                 # Update state
+#                 is_receiving = True
+#                 last_chunk_time = datetime.now()
+#                 audio_data += chunk
+                
+#                 # Prevent memory overflow
+#                 duration = len(audio_data) / 32000  # 16kHz * 2 bytes
+#                 if duration > MAX_AUDIO_DURATION:
+#                     print(f"⚠️ Max audio duration reached ({duration:.1f}s), processing...")
+#                     await process_audio(audio_data)
+#                     audio_data = b''
+#                     is_receiving = False
+                
+#                 # Log progress (every ~1 second of audio)
+#                 if len(audio_data) % 32000 < len(chunk):
+#                     print(f"🎙️ Buffered: {len(audio_data)} bytes ({duration:.2f}s)")
+
+#     except WebSocketDisconnect:
+#         print("🚪 Client disconnected during communication")
+        
+#     except Exception as e:
+#         print(f"❌ Unexpected error in voice_chat: {e}")
+#         import traceback
+#         traceback.print_exc()
+        
+#     finally:
+#         # Cancel silence checker
+#         if silence_check_task:
+#             silence_check_task.cancel()
+#             try:
+#                 await silence_check_task
+#             except asyncio.CancelledError:
+#                 pass
+        
+#         # Process any remaining audio
+#         if audio_data:
+#             print("📦 Processing remaining audio buffer...")
+#             try:
+#                 await process_audio(audio_data)
+#             except Exception as e:
+#                 print(f"❌ Failed to process remaining audio: {e}")
+        
+#         # Close database session
+#         if db:
+#             try:
+#                 await db.close()
+#             except Exception as e:
+#                 print(f"⚠️ Error closing database: {e}")
+        
+#         # Close WebSocket if still connected
+#         if websocket.application_state == WebSocketState.CONNECTED:
+#             try:
+#                 await websocket.close()
+#                 print("✅ WebSocket closed cleanly")
+#             except Exception as e:
+#                 print(f"⚠️ Error closing WebSocket: {e}")
+
+
 
 # -------------------------
 # Main entry (single uvicorn invocation)

@@ -1,1 +1,5 @@
 backend/ai_core/models/
+audio_data
+cromadb
+env
+mydatabase.db

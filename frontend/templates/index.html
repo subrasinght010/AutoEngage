@@ -6,8 +6,8 @@
   <title>Voice Chat</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js"></script>
   <style>
     body {
       background: radial-gradient(circle at top left, #0f0c29, #302b63, #24243e);
@@ -77,7 +77,7 @@
       color: #fff;
     }
 
-    .btn:hover {
+    .btn:hover:not(:disabled) {
       transform: scale(1.05);
       background: rgba(255,255,255,0.08);
     }
@@ -85,6 +85,7 @@
     .btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
+      transform: scale(1);
     }
 
     .start-btn { border-color: #00f5c9; }
@@ -97,8 +98,21 @@
       margin-top: 2rem;
       background: linear-gradient(to right, #00f5c9, #9c42f5);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
       font-weight: bold;
+    }
+
+    .debug-info {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(17, 24, 39, 0.9);
+      padding: 15px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      border: 1px solid rgba(255,255,255,0.1);
+      max-width: 250px;
     }
 
     @media (max-width: 600px) {
@@ -109,14 +123,17 @@
         padding: 10px 18px;
         font-size: 0.9rem;
       }
+      .debug-info {
+        font-size: 0.75rem;
+        padding: 10px;
+      }
     }
   </style>
 </head>
 <body>
 
   <div class="status-bar">
-    <div class="text-lg font-bold">👤  <span id="username">guest</span></div>
-    
+    <div class="text-lg font-bold">👤 <span id="username">guest</span></div>
   </div>
 
   <div class="flex flex-col items-center justify-center min-h-[80vh] space-y-8">
@@ -146,175 +163,484 @@
     </div>
   </div>
 
+  <div class="debug-info">
+    <div><strong>Status:</strong> <span id="debug-status">Idle</span></div>
+    <div><strong>Buffer:</strong> <span id="debug-buffer">0 KB</span></div>
+    <div><strong>Sent:</strong> <span id="debug-sent">0 packets</span></div>
+    <div><strong>VAD:</strong> <span id="debug-vad">Inactive</span></div>
+    <div><strong>Silence Timer:</strong> <span id="debug-timer">-</span></div>
+  </div>
+
   <script>
     lucide.createIcons();
     const userId = "{{ user_id }}";
     const username = "{{username}}";
     document.getElementById("username").textContent = username;
-
+  
     let socket, audioContext, micStream, audioWorkletNode, micVAD, pingInterval;
     let isMuted = false;
     let speechActive = false;
-
+    let isProcessing = false;
+    let audioBuffer = [];
+    let packetsSent = 0;
+    let vadConfidenceThreshold = 0.85;
+    let silenceTimer = null;
+    let silenceWindow = 4000; // 4 seconds in milliseconds
+  
     function updateStatus(text, color = 'text-green-400') {
       const statusEl = document.getElementById('status');
       statusEl.textContent = text;
       statusEl.className = color;
+      document.getElementById('debug-status').textContent = text;
     }
 
+    function updateDebugInfo() {
+      const bufferSize = audioBuffer.reduce((sum, b) => sum + b.byteLength, 0);
+      document.getElementById('debug-buffer').textContent = `${(bufferSize / 1024).toFixed(2)} KB`;
+      document.getElementById('debug-sent').textContent = `${packetsSent} packets`;
+      document.getElementById('debug-vad').textContent = speechActive ? 'Active' : 'Inactive';
+      document.getElementById('debug-timer').textContent = silenceTimer ? 'Running' : '-';
+    }
+  
     function startPing() {
+      if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "ping" }));
         }
       }, 20000);
     }
-
+  
     function stopPing() {
-      clearInterval(pingInterval);
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
     }
-
+  
     function openWebSocket() {
-      socket = new WebSocket("wss://8nmwbg89-8080.inc1.devtunnels.ms/voice_chat");
+      if (socket && socket.readyState !== WebSocket.CLOSED) return;
+      
+      socket = new WebSocket("ws://localhost:8080/voice_chat");
       socket.binaryType = "arraybuffer";
-
+  
       socket.onopen = () => {
         updateStatus("Connected", "text-blue-400");
         document.getElementById("start").disabled = false;
         document.getElementById("stop").disabled = false;
       };
+      
       socket.onclose = () => {
         updateStatus("Disconnected", "text-red-400");
         document.getElementById("start").disabled = false;
         document.getElementById("stop").disabled = true;
         stopPing();
       };
-      socket.onerror = () => {
+      
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error);
         updateStatus("Connection Error", "text-yellow-400");
         stopPing();
       };
+      
       socket.onmessage = (event) => {
-        const audioBlob = new Blob([event.data], { type: "audio/wav" });
-        const audioURL = URL.createObjectURL(audioBlob);
-        new Audio(audioURL).play();
+        try {
+          const audioBlob = new Blob([event.data], { type: "audio/wav" });
+          const audioURL = URL.createObjectURL(audioBlob);
+          const audio = new Audio(audioURL);
+          audio.play().catch(e => console.error("Audio playback error:", e));
+        } catch (e) {
+          console.error("Message processing error:", e);
+        }
       };
     }
-
+  
     async function waitForSocketConnection() {
-      return new Promise(resolve => {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Socket connection timeout"));
+        }, 5000);
+        
         const check = setInterval(() => {
           if (socket?.readyState === WebSocket.OPEN) {
             clearInterval(check);
+            clearTimeout(timeout);
             resolve();
           }
         }, 100);
       });
     }
 
-    async function startVAD() {
-      micVAD = await vad.MicVAD.new({
-        onSpeechStart: () => {
-          if (!speechActive) {
-            speechActive = true;
-            document.querySelectorAll('.circle').forEach(c => c.classList.add('animate'));
-            updateStatus("Live", "text-green-400");
-          }
-        },
-        onSpeechEnd: () => {
-          speechActive = false;
-          document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
-          updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
-        }
-      });
-      await micVAD.start();
-    }
-
-    async function startAudioStream() {
-      document.getElementById("start").disabled = true;
-      document.getElementById("stop").disabled = false;
-
-      if (!socket || socket.readyState === WebSocket.CLOSED) {
-        openWebSocket();
-        await new Promise(r => setTimeout(r, 500));
+    function sendAudioData() {
+      if (audioBuffer.length === 0 || !socket || socket.readyState !== WebSocket.OPEN) {
+        return;
       }
 
-      await waitForSocketConnection();
-      socket.send(JSON.stringify({ type: "start_conversation", user_id: userId }));
+      try {
+        const totalLength = audioBuffer.reduce((sum, buf) => sum + buf.byteLength, 0);
+        
+        if (totalLength === 0) {
+          audioBuffer = [];
+          return;
+        }
 
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioContext = new AudioContext();
-
-      const workletBlob = new Blob([`
-        class PCMWorkletProcessor extends AudioWorkletProcessor {
-          process(inputs) {
-            const input = inputs[0][0];
-            if (!input) return true;
-            const pcm = new Int16Array(input.length);
-            for (let i = 0; i < input.length; i++) {
-              let s = Math.max(-1, Math.min(1, input[i]));
-              pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        const combined = new Uint8Array(totalLength);
+        let offset = 0;
+        
+        for (const buf of audioBuffer) {
+          combined.set(new Uint8Array(buf), offset);
+          offset += buf.byteLength;
+        }
+        
+        socket.send(combined.buffer);
+        packetsSent++;
+        
+        console.log(`Sent audio packet: ${(totalLength / 1024).toFixed(2)} KB`);
+        
+        audioBuffer = [];
+        updateDebugInfo();
+      } catch (error) {
+        console.error("Error sending audio:", error);
+        audioBuffer = [];
+      }
+    }
+  
+    async function startAudioStream() {
+      if (isProcessing) return;
+      isProcessing = true;
+      
+      try {
+        document.getElementById("start").disabled = true;
+        document.getElementById("stop").disabled = false;
+  
+        if (!socket || socket.readyState === WebSocket.CLOSED) {
+          openWebSocket();
+          await waitForSocketConnection();
+        }
+        
+        socket.send(JSON.stringify({ type: "start_conversation", user_id: userId }));
+  
+        micStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1,
+            latency: 0.01
+          } 
+        });
+        
+        audioContext = new AudioContext({ 
+          sampleRate: 48000,
+          latency: "interactive"
+        });
+  
+        const workletBlob = new Blob([`
+        class PCM16kMonoProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.targetRate = 16000;
+            this.inputRate = sampleRate;
+            this.ratio = this.inputRate / this.targetRate;
+            
+            this.hpAlpha = 0.95;
+            this.hpPrevIn = 0;
+            this.hpPrevOut = 0;
+            
+            this.noiseFloor = 0.01;
+            
+            this.inputBuffer = [];
+            this.outputBuffer = [];
+            
+            this.targetLevel = 0.5;
+            this.currentGain = 1.0;
+            this.gainSmoothing = 0.999;
+          }
+          
+          highPassFilter(sample) {
+            const output = this.hpAlpha * (this.hpPrevOut + sample - this.hpPrevIn);
+            this.hpPrevIn = sample;
+            this.hpPrevOut = output;
+            return output;
+          }
+          
+          applyAGC(sample) {
+            const envelope = Math.abs(sample);
+            
+            if (envelope > 0.001) {
+              const targetGain = this.targetLevel / (envelope + 0.001);
+              this.currentGain = this.gainSmoothing * this.currentGain + 
+                                 (1 - this.gainSmoothing) * targetGain;
+              this.currentGain = Math.min(4.0, Math.max(0.5, this.currentGain));
             }
-            this.port.postMessage(pcm.buffer, [pcm.buffer]);
+            
+            return sample * this.currentGain;
+          }
+          
+          lanczosKernel(x, a = 3) {
+            if (x === 0) return 1;
+            if (Math.abs(x) >= a) return 0;
+            const piX = Math.PI * x;
+            return (a * Math.sin(piX) * Math.sin(piX / a)) / (piX * piX);
+          }
+          
+          resampleLanczos(position) {
+            const a = 3;
+            const index = Math.floor(position);
+            let sum = 0;
+            let weightSum = 0;
+            
+            for (let i = index - a + 1; i <= index + a; i++) {
+              if (i >= 0 && i < this.inputBuffer.length) {
+                const weight = this.lanczosKernel(position - i, a);
+                sum += this.inputBuffer[i] * weight;
+                weightSum += weight;
+              }
+            }
+            
+            return weightSum > 0 ? sum / weightSum : 0;
+          }
+    
+          process(inputs) {
+            const input = inputs[0];
+            if (!input || !input[0]) return true;
+            
+            const samples = input[0];
+            
+            for (let i = 0; i < samples.length; i++) {
+              let sample = samples[i];
+              
+              sample = this.highPassFilter(sample);
+              
+              if (Math.abs(sample) < this.noiseFloor) {
+                sample = 0;
+              }
+              
+              sample = this.applyAGC(sample);
+              
+              this.inputBuffer.push(sample);
+            }
+            
+            const outputSamples = Math.floor(this.inputBuffer.length / this.ratio);
+            
+            for (let i = 0; i < outputSamples; i++) {
+              const position = i * this.ratio;
+              const sample = this.resampleLanczos(position);
+              
+              const clamped = Math.max(-1, Math.min(1, sample));
+              
+              const pcmValue = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+              
+              this.outputBuffer.push(Math.round(pcmValue));
+            }
+            
+            const samplesToRemove = Math.floor(outputSamples * this.ratio);
+            this.inputBuffer.splice(0, samplesToRemove);
+            
+            if (this.outputBuffer.length >= 1600) {
+              const int16 = new Int16Array(this.outputBuffer);
+              this.port.postMessage(int16.buffer, [int16.buffer]);
+              this.outputBuffer = [];
+            }
+            
             return true;
           }
         }
-        registerProcessor('pcm-worklet', PCMWorkletProcessor);
-      `], { type: "application/javascript" });
-
-      const workletURL = URL.createObjectURL(workletBlob);
-      await audioContext.audioWorklet.addModule(workletURL);
-
-      const micSource = audioContext.createMediaStreamSource(micStream);
-      audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-worklet');
-
-      audioWorkletNode.port.onmessage = (event) => {
-        if (!isMuted && speechActive && socket?.readyState === WebSocket.OPEN) {
-          socket.send(event.data);
-        }
-      };
-
-      micSource.connect(audioWorkletNode).connect(audioContext.destination);
-
-      await startVAD();
-      startPing();
+    
+        registerProcessor('pcm16k-mono', PCM16kMonoProcessor);
+        `], { type: "application/javascript" });
+  
+        const workletURL = URL.createObjectURL(workletBlob);
+        await audioContext.audioWorklet.addModule(workletURL);
+  
+        const micSource = audioContext.createMediaStreamSource(micStream);
+        audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm16k-mono');
+  
+        audioWorkletNode.port.onmessage = (event) => {
+          if (!isMuted && speechActive) {
+            audioBuffer.push(event.data);
+            updateDebugInfo();
+          }
+        };
+  
+        micSource.connect(audioWorkletNode);
+  
+        micVAD = await vad.MicVAD.new({
+          onnxWASMBasePath: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
+          baseAssetPath: "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/",
+          stream: micStream,
+          positiveSpeechThreshold: vadConfidenceThreshold,
+          negativeSpeechThreshold: 0.70,
+          minSpeechFrames: 4,
+          preSpeechPadFrames: 2,
+          redemptionFrames: 10,
+          frameSamples: 1536,
+          
+          onSpeechStart: () => {
+            if (!isMuted) {
+              if (silenceTimer) {
+                clearTimeout(silenceTimer);
+                silenceTimer = null;
+                console.log("Speech resumed - cancelled silence timer");
+              }
+              
+              if (!speechActive) {
+                speechActive = true;
+                audioBuffer = [];
+                packetsSent = 0;
+                console.log("Speech detected - buffering started");
+              }
+              
+              document.querySelectorAll('.circle').forEach(c => c.classList.add('animate'));
+              updateStatus("Speaking", "text-green-400");
+              updateDebugInfo();
+            }
+          },
+          
+          onSpeechEnd: () => {
+            if (speechActive && !isMuted) {
+              console.log("Speech paused - starting 4-second silence window");
+              
+              if (silenceTimer) {
+                clearTimeout(silenceTimer);
+              }
+              
+              silenceTimer = setTimeout(() => {
+                console.log("4 seconds of silence - sending buffered audio");
+                
+                speechActive = false;
+                
+                sendAudioData();
+                
+                document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+                updateStatus("Connected", "text-blue-400");
+                updateDebugInfo();
+                
+                silenceTimer = null;
+              }, silenceWindow);
+              
+              document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+              updateStatus("Listening...", "text-cyan-400");
+              updateDebugInfo();
+            }
+          }
+        });
+        
+        await micVAD.start();
+        startPing();
+        updateStatus("Ready - Speak now", "text-blue-400");
+      } catch (error) {
+        console.error("Error starting audio stream:", error);
+        updateStatus("Error: " + error.message, "text-red-400");
+        await stopAudioStream();
+      } finally {
+        isProcessing = false;
+      }
     }
-
+  
     async function stopAudioStream() {
-      document.getElementById("start").disabled = false;
-      document.getElementById("stop").disabled = true;
-
-      if (audioWorkletNode) audioWorkletNode.disconnect();
-      if (audioContext) await audioContext.close();
-      if (micStream) micStream.getTracks().forEach(t => t.stop());
-      if (micVAD) await micVAD.pause();
-
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "end_conversation" }));
+      if (isProcessing) return;
+      isProcessing = true;
+      
+      try {
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+        
+        if (speechActive && audioBuffer.length > 0) {
+          sendAudioData();
+        }
+        
+        document.getElementById("start").disabled = false;
+        document.getElementById("stop").disabled = true;
+  
+        if (micVAD) {
+          await micVAD.pause();
+          micVAD.destroy();
+          micVAD = null;
+        }
+        
+        if (audioWorkletNode) {
+          audioWorkletNode.disconnect();
+          audioWorkletNode = null;
+        }
+        
+        if (audioContext) {
+          await audioContext.close();
+          audioContext = null;
+        }
+        
+        if (micStream) {
+          micStream.getTracks().forEach(t => t.stop());
+          micStream = null;
+        }
+  
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "end_conversation" }));
+        }
+        
+        if (socket) {
+          socket.close();
+          socket = null;
+        }
+  
+        speechActive = false;
+        audioBuffer = [];
+        packetsSent = 0;
+        document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+        updateStatus("Disconnected", "text-red-400");
+        updateDebugInfo();
+        stopPing();
+      } catch (error) {
+        console.error("Error stopping audio stream:", error);
+      } finally {
+        isProcessing = false;
       }
-
-      if (socket) {
-        socket.close();
-        socket = null;
-      }
-
-      document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
-      updateStatus("Disconnected", "text-red-400");
-      stopPing();
     }
-
+  
     document.getElementById("start").addEventListener("click", startAudioStream);
     document.getElementById("stop").addEventListener("click", stopAudioStream);
-
-    document.getElementById("mute").addEventListener("click", () => {
+  
+    document.getElementById("mute").addEventListener("click", async () => {
       isMuted = !isMuted;
       const muteBtn = document.getElementById("mute");
       muteBtn.innerHTML = isMuted
         ? `<i data-lucide="mic" class="w-5 h-5"></i> Unmute`
         : `<i data-lucide="mic-off" class="w-5 h-5"></i> Mute`;
-      updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
       lucide.createIcons();
+  
+      if (isMuted) {
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+        
+        if (speechActive) {
+          sendAudioData();
+          speechActive = false;
+        }
+        document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+      }
+      
+      updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
+  
+      if (micVAD) {
+        if (isMuted) {
+          await micVAD.pause();
+        } else {
+          await micVAD.start();
+        }
+      }
+      
+      updateDebugInfo();
+    });
+    
+    window.addEventListener("beforeunload", () => {
+      stopAudioStream();
     });
   </script>
-
+  
 </body>
 </html>

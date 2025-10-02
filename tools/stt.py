@@ -53,7 +53,7 @@ async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_file:
             audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
             sf.write(tmp_file.name, audio_np, sample_rate)
-            result = model.transcribe(tmp_file.name, language="en")
+            result = model.transcribe(tmp_file.name, language="hi")
             return result.get("text", "")
     except Exception as e:
         print(f"❌ Transcription error: {e}")
@@ -65,7 +65,7 @@ async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 
 async def test_speech_to_text():
     """Test speech-to-text with a sample WAV file."""
     try:
-        sample_file = "/Users/subrat/Desktop/Agent/audio_20250930_210337_44k.wav"
+        sample_file = "/Users/subrat/Desktop/Agent/audio_data/audio_20251003_013131.wav"
         save_file = "/Users/subrat/Desktop/Agent/audio_data/audio_20250930_212355.wav"
 
         audio_np, sr = sf.read(sample_file, dtype="int16")
