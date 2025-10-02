@@ -11,7 +11,7 @@ import os
 # Device and Model
 # -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = whisper.load_model("medium").to(device)  # Use 'cpu' or 'cuda'
+model = whisper.load_model("medium").to('cpu')  # Use 'cpu' or 'cuda'
 
 # -------------------------------
 # Utilities
@@ -43,18 +43,6 @@ async def ensure_pcm_bytes(audio_bytes: bytes, target_rate: int = 16000) -> byte
         print(f"❌ Failed to convert to PCM16: {e}")
         return audio_bytes
 
-# -------------------------------
-# Save Processed Audio
-# -------------------------------
-def save_processed_audio(audio_bytes: bytes, filename: str, sample_rate: int = 16000):
-    """Save PCM16 audio bytes to WAV."""
-    try:
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        sf.write(filename, audio_np, sample_rate)
-        print(f"💾 Saved audio: {filename}")
-    except Exception as e:
-        print(f"❌ Error saving audio: {e}")
 
 # -------------------------------
 # Transcription
@@ -62,15 +50,8 @@ def save_processed_audio(audio_bytes: bytes, filename: str, sample_rate: int = 1
 async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 16000, save_path: str = None) -> str:
     """Transcribe audio bytes using Whisper. Optionally save audio."""
     try:
-        # Ensure PCM16
-        pcm_bytes = await ensure_pcm_bytes(audio_bytes, sample_rate)
-
-        # Save processed file if path provided
-        if save_path:
-            save_processed_audio(pcm_bytes, save_path, sample_rate)
-
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_file:
-            audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
             sf.write(tmp_file.name, audio_np, sample_rate)
             result = model.transcribe(tmp_file.name, language="en")
             return result.get("text", "")

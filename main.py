@@ -57,21 +57,9 @@ from database.models import User
 # Load env & constants
 # -------------------------
 load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY", "default_secret_key")
+SECRET_KEY = os.getenv("SECRET_KEY", "access_token")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
-# -------------------------
-# Logger setup
-# -------------------------
-logger = logging.getLogger("voice-app")
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter("[%(asctime)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-handler.setFormatter(formatter)
-logger.handlers.clear()
-logger.addHandler(handler)
-logger.propagate = False
 
 # -------------------------
 # FastAPI app
@@ -221,8 +209,8 @@ async def login(
 # -------------------------
 # Scheduler: auto-followups
 # -------------------------
-scheduler = BackgroundScheduler()
-scheduler.start()
+# scheduler = BackgroundScheduler()
+# scheduler.start()
 
 def auto_followups():
     print("⏰ Running auto-followups...")
@@ -265,7 +253,7 @@ def auto_followups():
             print(f"⚠️ Error processing lead {lead_id}: {e}")
 
 # schedule every 1 minute
-scheduler.add_job(auto_followups, 'interval', minutes=1)
+# scheduler.add_job(auto_followups, 'interval', minutes=1)
 
 # -------------------------
 # Generic incoming handler
