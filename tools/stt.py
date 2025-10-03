@@ -47,16 +47,36 @@ async def ensure_pcm_bytes(audio_bytes: bytes, target_rate: int = 16000) -> byte
 # -------------------------------
 # Transcription
 # -------------------------------
-async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 16000, save_path: str = None) -> str:
-    """Transcribe audio bytes using Whisper. Optionally save audio."""
+# async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 16000, save_path: str = None) -> str:
+#     """Transcribe audio bytes using Whisper. Optionally save audio."""
+#     try:
+#         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_file:
+#             audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+#             sf.write(tmp_file.name, audio_np, sample_rate)
+#             result = model.transcribe(tmp_file.name, language="hi")
+#             return result.get("text", "")
+#     except Exception as e:
+#         print(f"❌ Transcription error: {e}")
+#         return ""
+    
+async def transcribe_with_faster_whisper(audio_bytes: bytes, sample_rate: int = 16000) -> str:
+    """Transcribe Float32 audio bytes directly using OpenAI Whisper."""
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_file:
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
-            sf.write(tmp_file.name, audio_np, sample_rate)
-            result = model.transcribe(tmp_file.name, language="hi")
-            return result.get("text", "")
+        # Convert Float32 bytes to numpy array
+        audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
+        
+        # Make array writable (fixes the PyTorch warning)
+        audio_np = audio_np.copy()
+        
+        # OpenAI Whisper returns a dict, not tuple
+        result = model.transcribe(audio_np, language="en", fp16=False)
+        
+        return result.get("text", "").strip()
+        
     except Exception as e:
         print(f"❌ Transcription error: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 # -------------------------------
