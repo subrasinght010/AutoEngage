@@ -5,7 +5,6 @@ from nodes.communication_agent import communication_agent
 from nodes.db_update import db_update_node
 from nodes.follow_up import follow_up_node
 from nodes.incoming_listener import incoming_listener
-# choose the intent detector you built (LLM or simple)
 from nodes.intent_detector import intent_detector_llm as intent_detector_node
 from nodes.schedule_call import schedule_call_node, execute_call_node
 from nodes.verify_data import verify_data_node
@@ -39,7 +38,7 @@ for node in [
 
 # Incoming message flow
 graph.add_edge("incoming_listener", "intent_detector_node")
-graph.add_edge("incoming_listener", "verify_data_node")  # branch for new client
+graph.add_edge("intent_detector_node", "communication_agent")  # branch for new client
 
 #while communicating on whatapp or email may need to schedule call
 graph.add_edge("communication_agent", "intent_detector_node")

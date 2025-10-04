@@ -231,6 +231,9 @@ async def process_audio(
                 },
                 "stats": stats
             })
+            # TODO: Generate AI response and send audio back
+            # response_audio = await generate_ai_response(transcription)
+            # await websocket.send_bytes(response_audio)
         else:
             print("Empty transcription - no speech detected")
 
