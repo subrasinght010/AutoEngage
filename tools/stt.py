@@ -11,7 +11,7 @@ import os
 # Device and Model
 # -------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = whisper.load_model("turbo").to('cpu')  # Use 'cpu' or 'cuda'
+model = whisper.load_model("medium").to('cpu')  # Use 'cpu' or 'cuda'
 #Models (tiny, base, small, medium, large,turbo)
 # Size	Parameters	English-only model	Multilingual model	Required VRAM	Relative speed
 # tiny	39 M	tiny.en	tiny	~1 GB	~10x

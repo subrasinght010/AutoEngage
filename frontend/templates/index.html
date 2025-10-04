@@ -150,7 +150,7 @@
       <button id="stop" class="btn stop-btn" disabled>
         <i data-lucide="phone-off" class="w-5 h-5"></i> Stop
       </button>
-      <button id="mute" class="btn mute-btn">
+      <button id="mute" class="btn mute-btn" disabled>
         <i data-lucide="mic-off" class="w-5 h-5"></i> Mute
       </button>
     </div>
@@ -169,12 +169,13 @@
     <div><strong>Sent:</strong> <span id="debug-sent">0 packets</span></div>
     <div><strong>VAD:</strong> <span id="debug-vad">Inactive</span></div>
     <div><strong>Silence Timer:</strong> <span id="debug-timer">-</span></div>
+    <div><strong>Audio Processor:</strong> <span id="debug-processor">AudioWorklet</span></div>
   </div>
 
   <script>
     lucide.createIcons();
-    const userId = "{{ user_id }}";
-    const username = "{{username}}";
+    const userId = "user_123"; // Replace with actual user ID
+    const username = "guest";
     document.getElementById("username").textContent = username;
   
     let socket, audioContext, micStream, audioWorkletNode, micVAD, pingInterval;
@@ -187,6 +188,18 @@
     let silenceTimer = null;
     let silenceWindow = 4000;
   
+    // Button references
+    const startBtn = document.getElementById("start");
+    const stopBtn = document.getElementById("stop");
+    const muteBtn = document.getElementById("mute");
+
+    // Centralized button state management
+    function setButtonStates(config) {
+      startBtn.disabled = config.startDisabled;
+      stopBtn.disabled = config.stopDisabled;
+      muteBtn.disabled = config.muteDisabled;
+    }
+
     function updateStatus(text, color = 'text-green-400') {
       const statusEl = document.getElementById('status');
       statusEl.textContent = text;
@@ -226,14 +239,11 @@
   
       socket.onopen = () => {
         updateStatus("Connected", "text-blue-400");
-        document.getElementById("start").disabled = false;
-        document.getElementById("stop").disabled = false;
       };
       
       socket.onclose = () => {
         updateStatus("Disconnected", "text-red-400");
-        document.getElementById("start").disabled = false;
-        document.getElementById("stop").disabled = true;
+        setButtonStates({ startDisabled: false, stopDisabled: true, muteDisabled: true });
         stopPing();
       };
       
@@ -304,22 +314,52 @@
         audioBuffer = [];
       }
     }
+
+    // Define the AudioWorklet processor inline
+    const processorCode = `
+      class AudioCaptureProcessor extends AudioWorkletProcessor {
+        process(inputs, outputs, parameters) {
+          const input = inputs[0];
+          if (input.length > 0) {
+            const channelData = input[0];
+            // Send audio data to main thread
+            this.port.postMessage(channelData);
+          }
+          return true;
+        }
+      }
+      registerProcessor('audio-capture-processor', AudioCaptureProcessor);
+    `;
   
     async function startAudioStream() {
-      if (isProcessing) return;
+      if (isProcessing) {
+        console.log('⚠️ Already processing, ignoring duplicate start');
+        return;
+      }
+      
+      // Prevent double-initialization
+      if (audioContext || micStream) {
+        console.log('⚠️ Audio already initialized, stopping first');
+        await stopAudioStream();
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
       isProcessing = true;
       
+      // Disable Start button IMMEDIATELY
+      setButtonStates({ startDisabled: true, stopDisabled: true, muteDisabled: true });
+      
       try {
-        document.getElementById("start").disabled = true;
-        document.getElementById("stop").disabled = false;
-  
+        console.log('🎬 Starting audio stream...');
+        updateStatus("Initializing...", "text-yellow-400");
+
         if (!socket || socket.readyState === WebSocket.CLOSED) {
           openWebSocket();
           await waitForSocketConnection();
         }
         
         socket.send(JSON.stringify({ type: "start_conversation", user_id: userId }));
-  
+
         micStream = await navigator.mediaDevices.getUserMedia({ 
           audio: {
             echoCancellation: true,
@@ -335,79 +375,33 @@
           sampleRate: 48000,
           latency: "interactive"
         });
-  
-        const workletBlob = new Blob([`
-        class PCM16kMonoProcessor extends AudioWorkletProcessor {
-          constructor() {
-            super();
-            this.targetRate = 16000;
-            this.inputRate = sampleRate;
-            this.ratio = this.inputRate / this.targetRate;
-            this.inputBuffer = [];
-            this.outputBuffer = [];
-          }
-          
-          linearResample(position) {
-            const index = Math.floor(position);
-            const fraction = position - index;
-            
-            if (index + 1 >= this.inputBuffer.length) {
-              return this.inputBuffer[index] || 0;
-            }
-            
-            return this.inputBuffer[index] * (1 - fraction) + 
-                   this.inputBuffer[index + 1] * fraction;
-          }
-    
-          process(inputs) {
-            const input = inputs[0];
-            if (!input || !input[0]) return true;
-            
-            const samples = input[0];
-            
-            for (let i = 0; i < samples.length; i++) {
-              this.inputBuffer.push(samples[i]);
-            }
-            
-            const outputSamples = Math.floor(this.inputBuffer.length / this.ratio);
-            
-            for (let i = 0; i < outputSamples; i++) {
-              const position = i * this.ratio;
-              const sample = this.linearResample(position);
-              this.outputBuffer.push(sample);
-            }
-            
-            const samplesToRemove = Math.floor(outputSamples * this.ratio);
-            this.inputBuffer.splice(0, samplesToRemove);
-            
-            if (this.outputBuffer.length >= 1600) {
-              const float32 = new Float32Array(this.outputBuffer);
-              this.port.postMessage(float32.buffer, [float32.buffer]);
-              this.outputBuffer = [];
-            }
-            
-            return true;
-          }
-        }
-    
-        registerProcessor('pcm16k-mono', PCM16kMonoProcessor);
-        `], { type: "application/javascript" });
-  
-        const workletURL = URL.createObjectURL(workletBlob);
-        await audioContext.audioWorklet.addModule(workletURL);
-  
-        const micSource = audioContext.createMediaStreamSource(micStream);
-        audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm16k-mono');
-  
+        
+        console.log('Audio context created at', audioContext.sampleRate, 'Hz');
+
+        // Create AudioWorklet processor
+        const blob = new Blob([processorCode], { type: 'application/javascript' });
+        const processorUrl = URL.createObjectURL(blob);
+        
+        await audioContext.audioWorklet.addModule(processorUrl);
+        URL.revokeObjectURL(processorUrl);
+        
+        audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-capture-processor');
+        
+        // Handle audio data from the worklet
         audioWorkletNode.port.onmessage = (event) => {
           if (!isMuted && speechActive) {
-            audioBuffer.push(event.data);
+            const float32Array = new Float32Array(event.data);
+            audioBuffer.push(float32Array.buffer);
             updateDebugInfo();
           }
         };
-  
+        
+        const micSource = audioContext.createMediaStreamSource(micStream);
         micSource.connect(audioWorkletNode);
-  
+        audioWorkletNode.connect(audioContext.destination);
+        
+        console.log('AudioWorklet pipeline connected (48kHz, low-latency)');
+
         micVAD = await vad.MicVAD.new({
           model: "v5",
           onnxWASMBasePath: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
@@ -472,10 +466,15 @@
         await micVAD.start();
         startPing();
         updateStatus("Ready - Speak now", "text-blue-400");
+        
+        // Enable Stop and Mute buttons after successful start
+        setButtonStates({ startDisabled: true, stopDisabled: false, muteDisabled: false });
       } catch (error) {
         console.error("Error starting audio stream:", error);
         updateStatus("Error: " + error.message, "text-red-400");
         await stopAudioStream();
+        // Re-enable Start button on error
+        setButtonStates({ startDisabled: false, stopDisabled: true, muteDisabled: true });
       } finally {
         isProcessing = false;
       }
@@ -484,6 +483,9 @@
     async function stopAudioStream() {
       if (isProcessing) return;
       isProcessing = true;
+      
+      // Disable all buttons during cleanup
+      setButtonStates({ startDisabled: true, stopDisabled: true, muteDisabled: true });
       
       try {
         if (silenceTimer) {
@@ -494,10 +496,7 @@
         if (speechActive && audioBuffer.length > 0) {
           sendAudioData();
         }
-        
-        document.getElementById("start").disabled = false;
-        document.getElementById("stop").disabled = true;
-  
+
         if (micVAD) {
           await micVAD.pause();
           micVAD.destroy();
@@ -506,6 +505,7 @@
         
         if (audioWorkletNode) {
           audioWorkletNode.disconnect();
+          audioWorkletNode.port.onmessage = null;
           audioWorkletNode = null;
         }
         
@@ -518,7 +518,7 @@
           micStream.getTracks().forEach(t => t.stop());
           micStream = null;
         }
-  
+
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "end_conversation" }));
         }
@@ -527,32 +527,41 @@
           socket.close();
           socket = null;
         }
-  
+
         speechActive = false;
+        isMuted = false;
         audioBuffer = [];
         packetsSent = 0;
         document.querySelectorAll('.circle').forEach(c => c.classList.remove('animate'));
+        
+        // Reset mute button text
+        muteBtn.innerHTML = `<i data-lucide="mic-off" class="w-5 h-5"></i> Mute`;
+        lucide.createIcons();
+        
         updateStatus("Disconnected", "text-red-400");
         updateDebugInfo();
         stopPing();
+        
+        // Re-enable Start button after complete cleanup
+        setButtonStates({ startDisabled: false, stopDisabled: true, muteDisabled: true });
       } catch (error) {
         console.error("Error stopping audio stream:", error);
+        setButtonStates({ startDisabled: false, stopDisabled: true, muteDisabled: true });
       } finally {
         isProcessing = false;
       }
     }
   
-    document.getElementById("start").addEventListener("click", startAudioStream);
-    document.getElementById("stop").addEventListener("click", stopAudioStream);
+    startBtn.addEventListener("click", startAudioStream);
+    stopBtn.addEventListener("click", stopAudioStream);
   
-    document.getElementById("mute").addEventListener("click", async () => {
+    muteBtn.addEventListener("click", async () => {
       isMuted = !isMuted;
-      const muteBtn = document.getElementById("mute");
       muteBtn.innerHTML = isMuted
         ? `<i data-lucide="mic" class="w-5 h-5"></i> Unmute`
         : `<i data-lucide="mic-off" class="w-5 h-5"></i> Mute`;
       lucide.createIcons();
-  
+
       if (isMuted) {
         if (silenceTimer) {
           clearTimeout(silenceTimer);
@@ -567,7 +576,7 @@
       }
       
       updateStatus(isMuted ? "Muted" : "Connected", isMuted ? "text-yellow-400" : "text-blue-400");
-  
+
       if (micVAD) {
         if (isMuted) {
           await micVAD.pause();

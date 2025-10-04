@@ -1,26 +1,46 @@
-import numpy as np
 import soundfile as sf
-import matplotlib.pyplot as plt
+import numpy as np
+file_path ='/Users/subrat/Desktop/Agent/audio_data/audio_20251004_201421.wav'
+# Read audio file into bytes
+with open(file_path, 'rb') as f:
+    audio_bytes = f.read()
 
-# Load the audio file
-audio_path = "/Users/subrat/Desktop/Agent/AutoEngage/vad_audio_on_disconnect.wav"
-y, sr = sf.read(audio_path)
+# After saving a stretched file
+info = sf.info(file_path)
+print(f"Sample rate: {info.samplerate}")
+print(f"Duration: {info.duration}")
+print(f"Frames: {info.frames}")
+print(f"Subtype: {info.subtype}")
 
-# Compute basic statistics
-duration = len(y) / sr
-mean_amplitude = np.mean(np.abs(y))
-max_amplitude = np.max(np.abs(y))
-energy = np.sum(y**2) / len(y)
+# Calculate expected duration
+audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
+expected_duration = len(audio_array) / 16000
+print(f"Expected duration: {expected_duration}")
 
-# Plot waveform
-plt.figure(figsize=(12, 4))
-plt.plot(np.linspace(0, duration, num=len(y)), y, alpha=0.6)
-plt.title("Waveform of Received Audio")
-plt.xlabel("Time (s)")
-plt.ylabel("Amplitude")
-plt.show()
 
-print(f"Duration: {duration:.2f} sec")
-print(f"Mean Amplitude: {mean_amplitude:.5f}")
-print(f"Max Amplitude: {max_amplitude:.5f}")
-print(f"Energy: {energy:.5f}")
+
+import soundfile as sf
+import numpy as np
+# file_path ='/Users/subrat/Desktop/Agent/audio_data/audio_20251004_133652.wav'
+# Read audio file into bytes
+with open(file_path, 'rb') as f:
+    audio_bytes = f.read()
+
+# After saving a stretched file
+info = sf.info(file_path)
+print(f"Sample rate: {info.samplerate}")
+print(f"Duration: {info.duration}")
+print(f"Frames: {info.frames}")
+print(f"Subtype: {info.subtype}")
+
+# Calculate expected duration
+audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
+expected_duration = len(audio_array) / 16000
+print(f"Expected duration: {expected_duration}")
+
+
+from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
+model = load_silero_vad()
+wav = read_audio(file_path)
+speech_timestamps = get_speech_timestamps(wav, model, return_seconds=True)
+print(speech_timestamps)
