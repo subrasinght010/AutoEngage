@@ -43,15 +43,15 @@ def knowledge_agent(state: WorkflowState) -> WorkflowState:
     
     # Generate response using LLM with RAG context
     prompt = f"""Based ONLY on the following company knowledge, answer the user's question.
-If the answer is not in the provided knowledge, say you don't have that information.
+        If the answer is not in the provided knowledge, say you don't have that information.
 
-Company Knowledge:
-{rag_context}
+        Company Knowledge:
+        {rag_context}
 
-User Question: {user_query}
+        User Question: {user_query}
 
-Provide a helpful, concise answer in 2-3 sentences:"""
-    
+        Provide a helpful, concise answer in 2-3 sentences:"""
+            
     response = llm.generate(prompt)
     
     # Update state

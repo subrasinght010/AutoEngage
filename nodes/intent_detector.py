@@ -42,44 +42,44 @@ def intent_detector_llm(state: WorkflowState) -> WorkflowState:
     # LLM Prompt with RAG
     prompt = f"""You are an AI support agent for TechCorp.
 
-**CRITICAL: Answer using ONLY the Company Knowledge Context below. If info is not there, say you'll connect with a specialist.**
+    **CRITICAL: Answer using ONLY the Company Knowledge Context below. If info is not there, say you'll connect with a specialist.**
 
-{rag_context}
+    {rag_context}
 
-**Your Task:**
-1. Analyze the user message
-2. Detect intent (callback_request, send_details_email, product_query, etc.)
-3. Generate natural response using company knowledge
-4. Return structured JSON
+    **Your Task:**
+    1. Analyze the user message
+    2. Detect intent (callback_request, send_details_email, product_query, etc.)
+    3. Generate natural response using company knowledge
+    4. Return structured JSON
 
-**Conversation History:**
-{conversation_history}
+    **Conversation History:**
+    {conversation_history}
 
-**Current User Message:** {user_message}
+    **Current User Message:** {user_message}
 
-**Respond in JSON format:**
-{{
-  "immediate_response": "Natural conversational response",
-  "intent": "callback_request|send_details_email|send_details_sms|send_details_whatsapp|product_query|policy_query|complaint|general_inquiry",
-  "entities": {{
-    "callback_time": null,
-    "channel": null,
-    "email": null,
-    "phone": null,
-    "whatsapp_number": null,
-    "details_type": null,
-    "missing_info": []
-  }},
-  "needs_clarification": false,
-  "clarification_question": null,
-  "actions": [],
-  "used_knowledge": true,
-  "escalate_to_human": false
-}}
+    **Respond in JSON format:**
+    {{
+    "immediate_response": "Natural conversational response",
+    "intent": "callback_request|send_details_email|send_details_sms|send_details_whatsapp|product_query|policy_query|complaint|general_inquiry",
+    "entities": {{
+        "callback_time": null,
+        "channel": null,
+        "email": null,
+        "phone": null,
+        "whatsapp_number": null,
+        "details_type": null,
+        "missing_info": []
+    }},
+    "needs_clarification": false,
+    "clarification_question": null,
+    "actions": [],
+    "used_knowledge": true,
+    "escalate_to_human": false
+    }}
 
-JSON Response:"""
-    
-    # Call LLM
+    JSON Response:"""
+        
+        # Call LLM
     llm_response_text = llm.generate(prompt)
     
     # Parse JSON

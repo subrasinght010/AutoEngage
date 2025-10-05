@@ -5,7 +5,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
 from contextlib import asynccontextmanager
-
+# Add these imports
+from workers import worker_manager
+import signal
 from dotenv import load_dotenv
 import jwt
 import uvicorn
@@ -66,10 +68,37 @@ ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 # -------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan - startup and shutdown"""
+    # Startup
+    print("\n" + "=" * 60)
+    print("🚀 Application Starting...")
+    print("=" * 60)
+    
     await init_db()
-    print("🚀 Database initialized")
+    print("✅ Database initialized")
+    
+    # Start background workers
+    try:
+        await worker_manager.start_all_workers()
+    except Exception as e:
+        print(f"⚠️ Warning: Some workers failed to start: {e}")
+    
+    print("\n" + "=" * 60)
+    print("✅ Application Ready!")
+    print("=" * 60 + "\n")
+    
     yield
-    print("🛑 App shutting down")
+    
+    # Shutdown
+    print("\n" + "=" * 60)
+    print("🛑 Application Shutting Down...")
+    print("=" * 60)
+    
+    await worker_manager.stop_all_workers()
+    
+    print("\n" + "=" * 60)
+    print("✅ Application Shutdown Complete")
+    print("=" * 60 + "\n")
 
 
 app = FastAPI(title="Multi-Agent Communication System", lifespan=lifespan)
@@ -255,83 +284,145 @@ async def handle_incoming(message_data: Dict[str, Any]) -> WorkflowState:
 
     return state
 
-
-@app.post("/webhook/call")
-async def process_voice_webhook(request: Request):
-    """
-    Main webhook - handles transcription and returns immediate response
-    """
-    
-    data = await request.json()
-    lead_id = data["lead_id"]
-    transcription = data["transcription"]
-    
-    print(f"💬 User: {transcription}")
-    
-    # ========== GET CONVERSATION CONTEXT ==========
-    session = conversation_memory.get_session(lead_id)
-    if not session:
-        session = conversation_memory.create_session(lead_id)
-    
-    history = conversation_memory.get_conversation_history(lead_id, last_n=5)
-    lead_data = session.get("lead_data", {})
-    
-    # ========== GENERATE IMMEDIATE RESPONSE ==========
-    # This is FAST - no intent detection, just conversational AI
-    ai_response = await generate_immediate_response(
-        user_message=transcription,
-        conversation_history=history,
-        lead_data=lead_data
-    )
-    
-    print(f"🤖 AI: {ai_response}")
-    
-    # ========== SAVE TO MEMORY ==========
-    conversation_memory.add_message(lead_id, "user", transcription)
-    conversation_memory.add_message(lead_id, "assistant", ai_response)
-    
-    # ========== TRIGGER BACKGROUND PROCESSING ==========
-    # Fire and forget - user already has response!
-    asyncio.create_task(
-        background_intent_and_action_pipeline(
-            lead_id=lead_id,
-            user_message=transcription,
-            ai_response=ai_response,
-            history=history
-        )
-    )
-    
-    # ========== RETURN IMMEDIATELY ==========
+# Add this endpoint with other routes
+@app.get("/workers/status")
+async def workers_status():
+    """Get status of all background workers"""
     return {
-        "success": True,
-        "ai_message": ai_response,
-        "response_time_ms": 800  # Typical response time
+        "workers": worker_manager.get_all_status(),
+        "timestamp": datetime.now().isoformat()
     }
 
-@app.post("/webhook/email")
-async def webhook_email(request: Request):
-    data = await request.json()
-    message_data = {
-        "lead_id": data.get("from"),
-        "message": f"{data.get('subject', '')}: {data.get('body', '')}",
-        "channel": "email",
-    }
-    state = await handle_incoming(message_data)
-    return {"status": "email processed", "lead_id": state.lead_id}
+# Add import
+from utils.health_check import health_check
+
+# Add endpoint
+@app.get("/health")
+async def health_endpoint():
+    """
+    Health check endpoint
+    Returns 200 if healthy, 503 if unhealthy
+    """
+    result = await health_check.check_all()
+    
+    status_code = 200 if result['overall_status'] == 'healthy' else 503
+    
+    return JSONResponse(
+        content=result,
+        status_code=status_code
+    )
+
+@app.get("/health/quick")
+async def health_quick():
+    """Quick health check - just returns 200"""
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+# Add these imports at the top
+from services.sms_handler import sms_handler
+from services.whatsapp_handler import whatsapp_handler
+
+# Add these endpoints AFTER existing routes (before WebSocket endpoint)
+
+# -------------------------
+# SMS Webhook
+# -------------------------
+@app.post("/webhook/sms")
+async def webhook_sms(request: Request):
+    """
+    Twilio SMS webhook endpoint
+    Configure in Twilio Console: https://yourserver.com/webhook/sms
+    """
+    try:
+        # Get form data from Twilio
+        form_data = await request.form()
+        webhook_data = {
+            'From': form_data.get('From'),
+            'To': form_data.get('To'),
+            'Body': form_data.get('Body'),
+            'MessageSid': form_data.get('MessageSid')
+        }
+        
+        print(f"📱 SMS Webhook received: {webhook_data}")
+        
+        # Process SMS
+        result = await sms_handler.handle_incoming_sms(webhook_data)
+        
+        # Return TwiML response (required by Twilio)
+        from fastapi.responses import Response
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml"
+        )
+        
+    except Exception as e:
+        print(f"❌ SMS webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml",
+            status_code=200  # Always return 200 to Twilio
+        )
 
 
+# -------------------------
+# WhatsApp Webhook
+# -------------------------
 @app.post("/webhook/whatsapp")
 async def webhook_whatsapp(request: Request):
-    data = await request.json()
-    message_data = {
-        "lead_id": data.get("from"),
-        "message": data.get("message"),
-        "channel": "whatsapp",
-        "voice_file_url": data.get("voice_file_url"),
-    }
-    state = await handle_incoming(message_data)
-    return {"status": "whatsapp processed", "lead_id": state.lead_id}
+    """
+    Twilio WhatsApp webhook endpoint
+    Configure in Twilio Console: https://yourserver.com/webhook/whatsapp
+    """
+    try:
+        # Get form data from Twilio
+        form_data = await request.form()
+        webhook_data = {
+            'From': form_data.get('From'),
+            'To': form_data.get('To'),
+            'Body': form_data.get('Body'),
+            'MessageSid': form_data.get('MessageSid'),
+            'MediaUrl0': form_data.get('MediaUrl0'),  # First media attachment
+            'NumMedia': form_data.get('NumMedia', '0')
+        }
+        
+        print(f"💬 WhatsApp Webhook received: {webhook_data}")
+        
+        # Process WhatsApp
+        result = await whatsapp_handler.handle_incoming_whatsapp(webhook_data)
+        
+        # Return TwiML response
+        from fastapi.responses import Response
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml"
+        )
+        
+    except Exception as e:
+        print(f"❌ WhatsApp webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml",
+            status_code=200
+        )
 
+
+# -------------------------
+# Webhook Status Check
+# -------------------------
+@app.get("/webhook/status")
+async def webhook_status():
+    """Check if webhooks are working"""
+    return {
+        "status": "online",
+        "endpoints": {
+            "sms": "/webhook/sms",
+            "whatsapp": "/webhook/whatsapp"
+        },
+        "timestamp": datetime.now().isoformat()
+    }
 
 # ==================== SAFE SEND HELPER ====================
 async def safe_send(websocket: WebSocket, data: dict) -> bool:
