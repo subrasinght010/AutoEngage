@@ -257,17 +257,56 @@ async def handle_incoming(message_data: Dict[str, Any]) -> WorkflowState:
 
 
 @app.post("/webhook/call")
-async def webhook_call(request: Request):
+async def process_voice_webhook(request: Request):
+    """
+    Main webhook - handles transcription and returns immediate response
+    """
+    
     data = await request.json()
-    message_data = {
-        "lead_id": data.get("caller"),
-        "message": data.get("transcript") or "Incoming call",
-        "channel": "call",
-        "voice_file_url": data.get("recording_url") or data.get("voice_file_url"),
+    lead_id = data["lead_id"]
+    transcription = data["transcription"]
+    
+    print(f"💬 User: {transcription}")
+    
+    # ========== GET CONVERSATION CONTEXT ==========
+    session = conversation_memory.get_session(lead_id)
+    if not session:
+        session = conversation_memory.create_session(lead_id)
+    
+    history = conversation_memory.get_conversation_history(lead_id, last_n=5)
+    lead_data = session.get("lead_data", {})
+    
+    # ========== GENERATE IMMEDIATE RESPONSE ==========
+    # This is FAST - no intent detection, just conversational AI
+    ai_response = await generate_immediate_response(
+        user_message=transcription,
+        conversation_history=history,
+        lead_data=lead_data
+    )
+    
+    print(f"🤖 AI: {ai_response}")
+    
+    # ========== SAVE TO MEMORY ==========
+    conversation_memory.add_message(lead_id, "user", transcription)
+    conversation_memory.add_message(lead_id, "assistant", ai_response)
+    
+    # ========== TRIGGER BACKGROUND PROCESSING ==========
+    # Fire and forget - user already has response!
+    asyncio.create_task(
+        background_intent_and_action_pipeline(
+            lead_id=lead_id,
+            user_message=transcription,
+            ai_response=ai_response,
+            history=history
+        )
+    )
+    
+    # ========== RETURN IMMEDIATELY ==========
+    return {
+        "success": True,
+        "ai_message": ai_response,
+        "response_time_ms": 800  # Typical response time
     }
-    state = await handle_incoming(message_data)
-    return {"status": "call processed", "lead_id": state.lead_id}
-
 
 @app.post("/webhook/email")
 async def webhook_email(request: Request):

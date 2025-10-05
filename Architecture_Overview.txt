@@ -1,0 +1,170 @@
+Complete Architecture with RAG Knowledge System
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         USER (CLIENT)                               │
+│                    Web Browser / Mobile App                         │
+└────────────┬────────────────────────────────────────────────────────┘
+             │ Audio Stream (WebSocket)
+             ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      FASTAPI SERVER (main.py)                       │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │            WebSocket Handler (/voice_chat)                   │ │
+│  │  - Silence Detection (2 seconds)                             │ │
+│  │  - Audio Buffer Management                                   │ │
+│  │  - Session Management                                        │ │
+│  └────────────────────┬─────────────────────────────────────────┘ │
+│                       │                                             │
+│                       ▼                                             │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │              STT Node (nodes/stt_node.py)                    │ │
+│  │  - Whisper Model: medium/turbo                               │ │
+│  │  - Audio → Text Transcription                                │ │
+│  └────────────────────┬─────────────────────────────────────────┘ │
+│                       │ Transcribed Text                            │
+│                       ▼                                             │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │         RAG Knowledge Retrieval (NEW)                        │ │
+│  │         (tools/vector_store.py)                              │ │
+│  │  - Query user message in vector DB                           │ │
+│  │  - Retrieve top 3-5 relevant docs                            │ │
+│  │  - Add context to LLM prompt                                 │ │
+│  └────────────────────┬─────────────────────────────────────────┘ │
+│                       │ Text + Knowledge Context                    │
+│                       ▼                                             │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │      Intent Detector + Response Generator                    │ │
+│  │      (nodes/intent_detector.py)                              │ │
+│  │  - LLM: Mistral 7B (tools/language_model.py)                │ │
+│  │  - Input: User message + RAG context + History               │ │
+│  │  - Output: Structured JSON with:                             │ │
+│  │    * immediate_response                                      │ │
+│  │    * intent                                                  │ │
+│  │    * entities                                                │ │
+│  │    * actions                                                 │ │
+│  │    * needs_clarification                                     │ │
+│  └─────────┬────────────────────────────────────────────────────┘ │
+│            │                                                        │
+│     ┌──────┴───────┐                                               │
+│     ▼              ▼                                               │
+│  FAST PATH    BACKGROUND PATH                                      │
+└─────┼──────────────┼─────────────────────────────────────────────┘
+      │              │
+      ▼              ▼
+
+
+Fast Path (Immediate Response)
+┌──────────────────────────────────────────────────────────────────┐
+│                      FAST PATH                                   │
+│                                                                  │
+│  immediate_response (from LLM)                                  │
+│  ↓                                                               │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │         TTS Node (nodes/tts_node.py)                   │    │
+│  │  - Convert text to speech                              │    │
+│  │  - Engine: pyttsx3 / ElevenLabs                        │    │
+│  └──────────────────┬─────────────────────────────────────┘    │
+│                     │ Audio                                     │
+│                     ▼                                           │
+│              WebSocket Send                                     │
+│                     ↓                                           │
+│              USER HEARS RESPONSE                                │
+│                                                                 │
+│  Target: < 2 seconds                                            │
+└──────────────────────────────────────────────────────────────────┘
+
+Background Path (Intelligence Pipeline)
+┌──────────────────────────────────────────────────────────────────┐
+│                   BACKGROUND PATH                                │
+│             (Async - Parallel Execution)                         │
+│                                                                  │
+│  Parse Complete JSON from LLM                                   │
+│  ↓                                                               │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │      Check: needs_clarification                        │    │
+│  │  - If true: Store partial data, wait for next input    │    │
+│  │  - If false: Execute actions                           │    │
+│  └──────────────────┬─────────────────────────────────────┘    │
+│                     │ needs_clarification = false               │
+│                     ▼                                           │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │         Action Router (Parallel Tasks)                 │    │
+│  └────┬────────┬────────┬────────┬────────┬──────────────┘    │
+│       │        │        │        │        │                    │
+│       ▼        ▼        ▼        ▼        ▼                    │
+│   ┌──────┐┌──────┐┌────────┐┌──────┐┌────────┐              │
+│   │Intent││Comms ││Schedule││  DB  ││Knowledge│              │
+│   │Logic ││Agent ││Callback││Update││ Agent  │              │
+│   └──────┘└──────┘└────────┘└──────┘└────────┘              │
+└──────────────────────────────────────────────────────────────────┘
+
+RAG (Retrieval-Augmented Generation) System
+┌──────────────────────────────────────────────────────────────────┐
+│              RAG KNOWLEDGE SYSTEM ARCHITECTURE                   │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │         Knowledge Base Sources                         │    │
+│  │  - Company policies (PDF)                              │    │
+│  │  - Product documentation (PDF/Markdown)                │    │
+│  │  - FAQs (Text/JSON)                                    │    │
+│  │  - Pricing information (CSV/JSON)                      │    │
+│  │  - Troubleshooting guides (Markdown)                   │    │
+│  │  - Support scripts (Text)                              │    │
+│  └──────────────────┬─────────────────────────────────────┘    │
+│                     │                                           │
+│                     ▼                                           │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │      Document Processing Pipeline                      │    │
+│  │      (tools/vector_store.py - setup phase)             │    │
+│  │                                                        │    │
+│  │  Step 1: Document Loading                             │    │
+│  │    - Load PDFs, docs, text files                      │    │
+│  │    - Extract text content                             │    │
+│  │                                                        │    │
+│  │  Step 2: Text Chunking                                │    │
+│  │    - Split into 500-1000 token chunks                 │    │
+│  │    - Preserve context/meaning                         │    │
+│  │                                                        │    │
+│  │  Step 3: Embedding Generation                         │    │
+│  │    - Model: sentence-transformers/all-MiniLM-L6-v2    │    │
+│  │    - Convert chunks to 384-dim vectors                │    │
+│  │                                                        │    │
+│  │  Step 4: Vector Storage                               │    │
+│  │    - Store in ChromaDB (local, persistent)            │    │
+│  │    - Metadata: source, category, timestamp            │    │
+│  └──────────────────┬─────────────────────────────────────┘    │
+│                     │                                           │
+│                     ▼                                           │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │         ChromaDB Vector Database                       │    │
+│  │         (Persistent Local Storage)                     │    │
+│  │  - Collection: company_knowledge                       │    │
+│  │  - Embeddings stored with metadata                     │    │
+│  │  - Fast similarity search                              │    │
+│  └──────────────────┬─────────────────────────────────────┘    │
+│                     │                                           │
+│                     ▼                                           │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │      Query-Time RAG Workflow                           │    │
+│  │                                                        │    │
+│  │  1. User asks: "What's your refund policy?"           │    │
+│  │     ↓                                                  │    │
+│  │  2. Embed query using same model                      │    │
+│  │     ↓                                                  │    │
+│  │  3. Search ChromaDB (cosine similarity)               │    │
+│  │     - Get top 3-5 relevant chunks                     │    │
+│  │     - Relevance score > 0.7                           │    │
+│  │     ↓                                                  │    │
+│  │  4. Retrieved Context:                                │    │
+│  │     "Our refund policy allows returns within 30       │    │
+│  │      days of purchase with original receipt..."       │    │
+│  │     ↓                                                  │    │
+│  │  5. Add to LLM Prompt:                                │    │
+│  │     System: "Use ONLY this knowledge to respond"      │    │
+│  │     Context: [Retrieved chunks]                       │    │
+│  │     User Query: "What's your refund policy?"          │    │
+│  │     ↓                                                  │    │
+│  │  6. LLM generates answer using ONLY retrieved context │    │
+│  └────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘

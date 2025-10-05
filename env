@@ -1,0 +1,47 @@
+# Server
+SECRET_KEY=your_super_secret_key_change_this
+JWT_ALGORITHM=HS256
+HOST=0.0.0.0
+PORT=8080
+
+# Database
+DATABASE_URL=sqlite+aiosqlite:///./mydatabase.db
+
+# Company Info
+COMPANY_NAME=TechCorp
+SUPPORT_NUMBER=+1-800-TECHCORP
+
+# LLM Configuration
+USE_OLLAMA=true  # Set to false to use Transformers
+LLM_MODEL=mistral  # For Ollama OR mistralai/Mistral-7B-Instruct-v0.2 for Transformers
+LLM_DEVICE=cpu  # or cuda
+LLM_MAX_TOKENS=512
+LLM_TEMPERATURE=0.7
+
+# STT (Whisper)
+WHISPER_MODEL=medium
+WHISPER_LANGUAGE=en
+
+# TTS
+TTS_ENGINE=pyttsx3
+TTS_RATE=150
+
+# Email (SendGrid)
+SENDGRID_API_KEY=SG.your_sendgrid_api_key_here
+FROM_EMAIL=support@techcorp.com
+
+# SMS & WhatsApp (Twilio)
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=+1234567890
+TWILIO_WHATSAPP_NUMBER=whatsapp:+1234567890
+
+# RAG Configuration
+RAG_ENABLED=true
+RAG_TOP_K=3
+RAG_RELEVANCE_THRESHOLD=0.7
+KNOWLEDGE_BASE_DIR=./knowledge_base
+CHROMA_DB_DIR=./chroma_db
+
+# Email Templates
+EMAIL_TEMPLATES_DIR=./templates/email

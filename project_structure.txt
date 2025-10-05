@@ -1,0 +1,65 @@
+project/
+├── main.py                          # FastAPI with WebSocket (existing)
+├── .env                             # Configuration
+├── requirements.txt                 # Updated dependencies
+│
+├── tools/
+│   ├── language_model.py           # Mistral 7B LLM (existing - update)
+│   ├── vector_store.py             # 🆕 RAG system (ChromaDB)
+│   ├── stt.py                      # Whisper (existing)
+│   └── tts.py                      # 🆕 TTS implementation
+│
+├── nodes/
+│   ├── stt_node.py                 # Speech-to-text (existing)
+│   ├── tts_node.py                 # Text-to-speech (existing)
+│   ├── intent_detector.py          # Intent + LLM call (existing - update)
+│   ├── incoming_listener.py        # Handle incoming (existing)
+│   ├── communication_agent.py      # Email/SMS/WhatsApp (existing)
+│   ├── schedule_call.py            # Callback scheduling (existing)
+│   ├── db_update.py                # Database updates (existing)
+│   ├── verify_data.py              # Lead verification (existing)
+│   ├── follow_up.py                # Follow-up logic (existing)
+│   └── knowledge_agent.py          # 🆕 RAG query handler (existing - update)
+│
+├── services/                        # 🆕 Communication services
+│   ├── email_service.py            # SendGrid/SMTP
+│   ├── sms_service.py              # Twilio SMS
+│   └── whatsapp_service.py         # Twilio WhatsApp
+│
+├── database/
+│   ├── db.py                       # Database setup (existing)
+│   ├── models.py                   # SQLAlchemy models (existing)
+│   ├── crud.py                     # CRUD operations (existing)
+│   └── migrations/                 # Alembic migrations (existing)
+│
+├── state/
+│   └── workflow_state.py           # Workflow state (existing)
+│
+├── utils/
+│   ├── audio.py                    # Audio validation (existing)
+│   ├── secure.py                   # Auth helpers (existing)
+│   └── prompts.py                  # 🆕 LLM prompts
+│
+├── graph_builder.py                # LangGraph workflow (existing)
+│
+├── knowledge_base/                 # 🆕 RAG documents
+│   ├── company_policies.pdf
+│   ├── product_catalog.pdf
+│   ├── faqs.txt
+│   ├── pricing.json
+│   └── troubleshooting.md
+│
+├── chroma_db/                      # 🆕 ChromaDB storage (auto-generated)
+│   └── (vector database files)
+│
+├── frontend/
+│   ├── templates/
+│   │   ├── login.html              # Login page (existing)
+│   │   ├── signup.html             # Signup page (existing)
+│   │   └── index.html              # Main chat interface (existing)
+│   └── static/
+│       └── (CSS, JS files)
+│
+└── scripts/                        # 🆕 Utility scripts
+    ├── setup_rag.py                # Initialize RAG system
+    └── test_rag.py                 # Test RAG queries
