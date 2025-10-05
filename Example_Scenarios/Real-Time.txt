@@ -1,0 +1,743 @@
+Scenario 1: Product Query (RAG in Action)
+Call Flow:
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME: 00:00 - Call Connects                                    │
+└─────────────────────────────────────────────────────────────────┘
+
+[WebSocket Connection Established]
+[Silence Detection Timer: Started (2 seconds)]
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME: 00:00 - 00:02 (User Silent)                              │
+└─────────────────────────────────────────────────────────────────┘
+
+Server: [Proactive Greeting Triggered]
+AI Agent (TTS): "Hello, I'm the AI support agent of TechCorp. 
+                 How can I help you today, sir?"
+
+🔊 User hears: Greeting (via WebSocket audio stream)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME: 00:05 - User Speaks                                      │
+└─────────────────────────────────────────────────────────────────┘
+
+User (Audio): "What is your refund policy?"
+
+[Server Processing:]
+  ├─ Audio received via WebSocket (binary chunks)
+  ├─ STT (Whisper): Processing audio...
+  │   └─ Output: "What is your refund policy?"
+  │   └─ Time: ~800ms
+  │
+  ├─ RAG Query: Searching knowledge base...
+  │   Query: "What is your refund policy?"
+  │   └─ ChromaDB Search Results:
+  │       ├─ Doc 1 (similarity: 0.92): "We offer a 30-day money-back 
+  │       │                              guarantee. If you're not 
+  │       │                              satisfied..."
+  │       ├─ Doc 2 (similarity: 0.85): "Refunds are processed within 
+  │       │                              5-7 business days..."
+  │       └─ Doc 3 (similarity: 0.78): "Original receipt required for 
+  │                                      refund requests..."
+  │   └─ Time: ~200ms
+  │
+  ├─ LLM (Mistral 7B): Generating response with RAG context...
+  │   Prompt:
+  │   """
+  │   Company Knowledge Context:
+  │   - We offer a 30-day money-back guarantee...
+  │   - Refunds are processed within 5-7 business days...
+  │   
+  │   User: What is your refund policy?
+  │   
+  │   Respond in JSON...
+  │   """
+  │   
+  │   LLM Output (Streaming):
+  │   {
+  │     "immediate_response": "We offer a 30-day money-back guarantee. 
+  │                            If you're not satisfied with your purchase, 
+  │                            just contact us within 30 days for a full 
+  │                            refund. The refund will be processed in 
+  │                            5-7 business days.",
+  │     "intent": "policy_query",
+  │     "entities": {},
+  │     "needs_clarification": false,
+  │     "actions": [],
+  │     "used_knowledge": true,
+  │     "escalate_to_human": false
+  │   }
+  │   └─ Time: ~1.2s
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME: 00:07 - FAST PATH (User Response)                        │
+└─────────────────────────────────────────────────────────────────┘
+
+  ├─ Extract immediate_response
+  ├─ TTS (pyttsx3): Converting to speech...
+  │   └─ Time: ~600ms
+  └─ WebSocket Send: Audio chunks streaming...
+
+AI Agent (TTS): "We offer a 30-day money-back guarantee. If you're 
+                 not satisfied with your purchase, just contact us 
+                 within 30 days for a full refund. The refund will 
+                 be processed in 5-7 business days."
+
+🔊 User hears: Complete answer (Total time: ~2.8 seconds)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND PATH (Parallel - Doesn't Block User)                │
+└─────────────────────────────────────────────────────────────────┘
+
+  ├─ Database Update:
+  │   INSERT INTO conversations 
+  │   (lead_id, message, intent, timestamp)
+  │   VALUES ('user_123', 'What is your refund policy?', 
+  │           'policy_query', NOW())
+  │
+  ├─ Update Lead:
+  │   UPDATE leads SET 
+  │   last_contacted_at = NOW(),
+  │   lead_status = 'contacted'
+  │   WHERE id = 'user_123'
+  │
+  └─ Log Analytics:
+      - Intent: policy_query
+      - Knowledge Used: Yes
+      - Response Time: 2.8s
+      - Satisfaction: Predicted High
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME: 00:10 - User Follow-up                                   │
+└─────────────────────────────────────────────────────────────────┘
+
+User (Audio): "Okay, can you send me the full policy on email?"
+
+[Server Processing:]
+  ├─ STT: "Okay, can you send me the full policy on email?"
+  │   └─ Time: ~700ms
+  │
+  ├─ RAG Query: (Optional - context already available)
+  │
+  ├─ LLM: Detecting intent...
+  │   Output:
+  │   {
+  │     "immediate_response": "Absolutely! I'll send the complete 
+  │                            refund policy to your email right away.",
+  │     "intent": "send_details_email",
+  │     "entities": {
+  │       "channel": "email",
+  │       "details_type": "policy",
+  │       "email": "user@example.com"
+  │     },
+  │     "needs_clarification": false,
+  │     "actions": ["send_email"]
+  │   }
+  │   └─ Time: ~1.0s
+
+AI Agent (TTS): "Absolutely! I'll send the complete refund policy 
+                 to your email right away."
+
+🔊 User hears: Confirmation (Total time: ~2.2 seconds)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND PATH - Communication Agent                          │
+└─────────────────────────────────────────────────────────────────┘
+
+  ├─ Fetch Policy Document from knowledge base
+  │   └─ Retrieved: refund_policy.pdf content
+  │
+  ├─ Generate Email:
+  │   To: user@example.com
+  │   Subject: "TechCorp Refund Policy"
+  │   Body: [HTML template with policy details]
+  │
+  ├─ Send via SendGrid:
+  │   └─ Status: 202 Accepted
+  │   └─ Time: ~1.5s
+  │
+  └─ Update Database:
+      INSERT INTO conversations
+      VALUES ('Email sent to user@example.com', 'email', NOW())
+
+[Email arrives in user's inbox within 5-10 seconds]
+
+┌─────────────────────────────────────────────────────────────────┐
+│ TIME: 00:15 - Closing                                          │
+└─────────────────────────────────────────────────────────────────┘
+
+AI Agent: "Your request has been logged. You'll receive the policy 
+           via email shortly. Is there anything else I can help 
+           you with today?"
+
+User: "No, that's all. Thank you!"
+
+AI Agent: "Thank you for calling TechCorp. Have a great day!"
+
+[Call Ends]
+[WebSocket Disconnected]
+[Session Analytics Logged]
+
+
+Scenario 2: Callback Request (Incomplete Info)
+┌─────────────────────────────────────────────────────────────────┐
+│ Call Start - User Speaks First                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+TIME: 00:00
+
+User (Audio): "Hi, I want to schedule a callback"
+
+[Processing - 1.8s total]
+  ├─ STT: "Hi, I want to schedule a callback" (~700ms)
+  ├─ RAG: No query needed for callback intent
+  ├─ LLM: Detecting missing info...
+  │   Output:
+  │   {
+  │     "immediate_response": "I'd be happy to schedule that. 
+  │                            What time works best for you?",
+  │     "intent": "callback_request",
+  │     "entities": {
+  │       "callback_time": null,
+  │       "phone": "+919876543210",
+  │       "missing_info": ["callback_time"]
+  │     },
+  │     "needs_clarification": true,
+  │     "clarification_question": "What time works best for you?"
+  │   }
+  └─ TTS + Send (~600ms)
+
+AI Agent: "I'd be happy to schedule that. What time works best 
+           for you?"
+
+🔊 User hears response in 1.8 seconds
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:05
+
+User: "Tomorrow at 10 AM"
+
+[Processing - 2.0s total]
+  ├─ STT: "Tomorrow at 10 AM" (~600ms)
+  ├─ LLM: Parsing time + completing request...
+  │   Output:
+  │   {
+  │     "immediate_response": "Perfect! I'll schedule a callback 
+  │                            for tomorrow at 10 AM. You'll receive 
+  │                            a confirmation SMS shortly.",
+  │     "intent": "callback_request",
+  │     "entities": {
+  │       "callback_time": "2025-10-06T10:00:00",
+  │       "callback_date": "tomorrow",
+  │       "phone": "+919876543210"
+  │     },
+  │     "needs_clarification": false,
+  │     "actions": ["schedule_callback", "send_sms"]
+  │   }
+  └─ TTS + Send (~800ms)
+
+AI Agent: "Perfect! I'll schedule a callback for tomorrow at 
+           10 AM. You'll receive a confirmation SMS shortly."
+
+🔊 User hears response in 2.0 seconds
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND - Parallel Actions (3-5 seconds)                    │
+└─────────────────────────────────────────────────────────────────┘
+
+[Task 1: Database Update]
+  UPDATE leads SET
+    next_action_time = '2025-10-06 10:00:00',
+    pending_action = 'execute_call',
+    preferred_channel = 'call'
+  WHERE id = 'user_123'
+  
+  ✅ Complete: 800ms
+
+[Task 2: Send SMS Confirmation]
+  To: +919876543210
+  Message: "Your callback is scheduled for tomorrow at 10 AM. 
+           We'll call you then. - TechCorp"
+  
+  Via: Twilio API
+  ✅ SMS Sent: 1.2s
+  ✅ SMS Delivered: 3-5s
+
+[Task 3: Schedule Internal Task]
+  Create system reminder for tomorrow 10 AM
+  Assign to: Auto-dialer system
+  ✅ Complete: 500ms
+
+[Task 4: Log Conversation]
+  INSERT INTO conversations...
+  ✅ Complete: 300ms
+
+─────────────────────────────────────────────────────────────────
+
+📱 User receives SMS: "Your callback is scheduled for tomorrow 
+                       at 10 AM. We'll call you then. - TechCorp"
+
+AI Agent: "Is there anything else I can help you with today?"
+
+User: "No, that's all"
+
+AI Agent: "Thank you for calling TechCorp. Have a great day!"
+
+[Call Ends]
+
+Scenario 3: WhatsApp Details Request (Missing Number)
+┌─────────────────────────────────────────────────────────────────┐
+│ Call Start                                                      │
+└─────────────────────────────────────────────────────────────────┘
+
+TIME: 00:00 - Proactive Greeting
+
+AI Agent: "Hello, I'm the AI support agent of TechCorp. 
+           How can I help you today, sir?"
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:03
+
+User: "Send me your product catalog on WhatsApp"
+
+[Processing - 1.9s]
+  ├─ STT: "Send me your product catalog on WhatsApp" (~750ms)
+  ├─ LLM: Detecting missing WhatsApp number...
+  │   Output:
+  │   {
+  │     "immediate_response": "Sure! May I have your WhatsApp 
+  │                            number to send the catalog?",
+  │     "intent": "send_details_whatsapp",
+  │     "entities": {
+  │       "channel": "whatsapp",
+  │       "details_type": "product_catalog",
+  │       "whatsapp_number": null,
+  │       "missing_info": ["whatsapp_number"]
+  │     },
+  │     "needs_clarification": true
+  │   }
+  └─ TTS + Send
+
+AI Agent: "Sure! May I have your WhatsApp number to send 
+           the catalog?"
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:08
+
+User: "It's 9876543210"
+
+[Processing - 2.1s]
+  ├─ STT: "It's 9876543210" (~600ms)
+  ├─ LLM: Parsing + formatting number...
+  │   Output:
+  │   {
+  │     "immediate_response": "Perfect! I'll send the product 
+  │                            catalog to your WhatsApp at 
+  │                            9876543210 right away.",
+  │     "intent": "send_details_whatsapp",
+  │     "entities": {
+  │       "channel": "whatsapp",
+  │       "details_type": "product_catalog",
+  │       "whatsapp_number": "+919876543210"
+  │     },
+  │     "needs_clarification": false,
+  │     "actions": ["send_whatsapp", "fetch_product_catalog"]
+  │   }
+
+AI Agent: "Perfect! I'll send the product catalog to your 
+           WhatsApp at 9876543210 right away."
+
+🔊 User hears response in 2.1 seconds
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND - WhatsApp Delivery                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+[Task 1: Fetch Product Catalog]
+  Query knowledge_base for product_catalog.pdf
+  ✅ Retrieved: 2.5MB PDF file
+  Time: 800ms
+
+[Task 2: Upload to Cloud Storage]
+  Upload PDF to temporary public URL
+  URL: https://storage.techcorp.com/temp/catalog_xyz.pdf
+  ✅ Uploaded
+  Time: 1.5s
+
+[Task 3: Send WhatsApp Message]
+  To: whatsapp:+919876543210
+  Message: 
+  """
+  Hi! 👋
+  
+  Here's our product catalog as requested.
+  
+  📦 Explore our range of products
+  💰 Competitive pricing
+  🚚 Fast delivery
+  
+  Feel free to ask if you have any questions!
+  
+  Best regards,
+  TechCorp Team
+  """
+  Media: https://storage.techcorp.com/temp/catalog_xyz.pdf
+  
+  Via: Twilio WhatsApp API
+  ✅ Sent: 2.0s
+  ✅ Delivered: 3-5s
+
+[Task 4: Update Database]
+  UPDATE leads SET 
+    phone = '+919876543210',
+    preferred_channel = 'whatsapp',
+    last_contacted_at = NOW()
+  
+  INSERT INTO conversations...
+  ✅ Complete: 500ms
+
+─────────────────────────────────────────────────────────────────
+
+📱 User's WhatsApp: [Message received with PDF attachment]
+
+AI Agent: "You should receive the catalog on WhatsApp in the 
+           next few seconds. Is there anything else I can help 
+           you with?"
+
+User: "No, thank you"
+
+AI Agent: "Thank you for calling TechCorp. Have a great day!"
+
+Scenario 4: Complaint with Escalation
+┌─────────────────────────────────────────────────────────────────┐
+│ Angry Customer - Complaint Scenario                            │
+└─────────────────────────────────────────────────────────────────┘
+
+TIME: 00:00
+
+User (Frustrated tone): "I ordered a laptop 5 days ago and haven't 
+                         received it yet! This is unacceptable!"
+
+[Processing - 2.0s]
+  ├─ STT: Full transcription (~800ms)
+  ├─ RAG Query: Searching for order/shipping policies
+  │   Results: Shipping times, order tracking info
+  ├─ LLM: Detecting complaint + urgency...
+  │   Output:
+  │   {
+  │     "immediate_response": "I sincerely apologize for the delay. 
+  │                            I understand how frustrating this must be. 
+  │                            Let me check your order status right away. 
+  │                            May I have your order ID, please?",
+  │     "intent": "complaint",
+  │     "entities": {
+  │       "issue_type": "delivery_delay",
+  │       "urgency": "high",
+  │       "product": "laptop",
+  │       "order_id": null,
+  │       "missing_info": ["order_id"]
+  │     },
+  │     "needs_clarification": true,
+  │     "actions": ["create_ticket"]
+  │   }
+
+AI Agent: "I sincerely apologize for the delay. I understand how 
+           frustrating this must be. Let me check your order status 
+           right away. May I have your order ID, please?"
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:05
+
+User: "It's ORD98765"
+
+[Processing - 2.5s]
+  ├─ STT: "It's ORD98765" (~600ms)
+  ├─ Background: Query order database...
+  │   SELECT * FROM orders WHERE order_id = 'ORD98765'
+  │   Result:
+  │   {
+  │     "order_id": "ORD98765",
+  │     "status": "Out for Delivery",
+  │     "estimated_delivery": "Today, 6 PM",
+  │     "tracking_id": "TRK123456"
+  │   }
+  ├─ LLM: Generating resolution...
+  │   Output:
+  │   {
+  │     "immediate_response": "Thank you. I've checked order 
+  │                            ORD98765. Good news - your laptop 
+  │                            is actually out for delivery right 
+  │                            now and should reach you by 6 PM today. 
+  │                            I'll also send you a tracking link 
+  │                            via SMS.",
+  │     "intent": "complaint",
+  │     "entities": {
+  │       "order_id": "ORD98765",
+  │       "resolution_status": "resolved",
+  │       "phone": "+919876543210"
+  │     },
+  │     "needs_clarification": false,
+  │     "actions": ["send_sms", "update_ticket", "send_email"]
+  │   }
+
+AI Agent: "Thank you. I've checked order ORD98765. Good news - 
+           your laptop is actually out for delivery right now 
+           and should reach you by 6 PM today. I'll also send 
+           you a tracking link via SMS."
+
+🔊 User hears resolution in 2.5 seconds
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND - Multi-Channel Communication                       │
+└─────────────────────────────────────────────────────────────────┘
+
+[Parallel Tasks - All execute simultaneously]
+
+[Task 1: Send SMS with Tracking]
+  To: +919876543210
+  Message: "Your order #ORD98765 is out for delivery. 
+           Track here: https://track.techcorp.com/TRK123456 
+           ETA: Today 6 PM - TechCorp"
+  ✅ Sent: 1.2s
+
+[Task 2: Send Detailed Email]
+  To: user@example.com
+  Subject: "Your Order #ORD98765 - Delivery Update"
+  Body: [HTML with tracking details, apology, compensation offer]
+  ✅ Sent: 1.8s
+
+[Task 3: Create/Update Support Ticket]
+  INSERT INTO support_tickets
+  (lead_id, issue_type, priority, status, resolution)
+  VALUES ('user_123', 'delivery_delay', 'high', 'resolved', 
+          'Order out for delivery, ETA today 6 PM')
+  ✅ Created: Ticket #12345
+
+[Task 4: Update Lead]
+  UPDATE leads SET
+    lead_status = 'contacted',
+    last_issue = 'delivery_delay_resolved'
+  ✅ Updated
+
+[Task 5: Log Analytics]
+  - Complaint Type: Delivery Delay
+  - Resolution Time: 8 seconds
+  - Autonomous Resolution: Yes
+  - Customer Satisfaction: Predicted Medium-High
+  ✅ Logged
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:10
+
+User: "Oh, okay. I didn't get any notification. Will I get it today 
+       for sure?"
+
+[Processing - 1.8s]
+  ├─ STT + LLM Response
+  │   Using context from previous interaction...
+
+AI Agent: "Yes, absolutely. It's already out for delivery with 
+           our courier partner. You should receive it by 6 PM today. 
+           I've also sent you a tracking link via SMS so you can 
+           monitor it in real-time. Plus, I've sent a detailed 
+           email with all the information. Is there anything else 
+           I can help you with?"
+
+User: "No, that's fine. Thank you for checking"
+
+AI Agent: "You're welcome! We apologize again for any inconvenience. 
+           Thank you for calling TechCorp. Have a great day!"
+
+[Call Ends]
+
+─────────────────────────────────────────────────────────────────
+
+📊 Final Analytics:
+
+Call Duration: 15 seconds
+Intent: Complaint (Delivery Delay)
+Resolution: Autonomous (No human escalation needed)
+Actions Executed:
+  ✅ Order lookup
+  ✅ SMS sent (tracking link)
+  ✅ Email sent (detailed info)
+  ✅ Ticket created (#12345)
+  ✅ Customer satisfied
+
+Customer Sentiment: Angry → Neutral → Satisfied
+
+Scenario 5: Product Query with No Knowledge (Escalation)
+┌─────────────────────────────────────────────────────────────────┐
+│ Query Outside Knowledge Base                                   │
+└─────────────────────────────────────────────────────────────────┘
+
+TIME: 00:00
+
+User: "Do you have integration with Salesforce API v2.0?"
+
+[Processing - 2.0s]
+  ├─ STT: "Do you have integration with Salesforce API v2.0?"
+  ├─ RAG Query: Searching for "Salesforce API integration"
+  │   Results: [No relevant documents found]
+  │   Best Match Similarity: 0.45 (below 0.7 threshold)
+  ├─ LLM: Detecting lack of knowledge...
+  │   Output:
+  │   {
+  │     "immediate_response": "That's a great question. I don't have 
+  │                            specific information about Salesforce 
+  │                            API v2.0 integration in my current 
+  │                            knowledge base. Let me connect you with 
+  │                            one of our technical specialists who can 
+  │                            provide detailed information. Would that 
+  │                            work for you?",
+  │     "intent": "product_query",
+  │     "entities": {
+  │       "product_feature": "salesforce_api_integration",
+  │       "requires_human": true
+  │     },
+  │     "needs_clarification": false,
+  │     "actions": ["escalate_to_human"],
+  │     "used_knowledge": false,
+  │     "escalate_to_human": true
+  │   }
+
+AI Agent: "That's a great question. I don't have specific information 
+           about Salesforce API v2.0 integration in my current knowledge 
+           base. Let me connect you with one of our technical specialists 
+           who can provide detailed information. Would that work for you?"
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:05
+
+User: "Yes, please connect me"
+
+[Processing - 1.5s]
+  ├─ LLM: Confirming escalation...
+
+AI Agent: "Perfect! I'm transferring you to our technical team now. 
+           They'll be able to answer all your questions about Salesforce 
+           integration. Please hold for a moment."
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND - Escalation Process                                │
+└─────────────────────────────────────────────────────────────────┘
+
+[Task 1: Find Available Agent]
+  Query: SELECT * FROM agents 
+         WHERE status = 'available' 
+         AND expertise LIKE '%technical%'
+  Result: Agent John (ID: agent_45)
+  ✅ Found in 200ms
+
+[Task 2: Transfer Context]
+  Prepare handoff package:
+  {
+    "customer": "user_123",
+    "conversation_history": [...],
+    "query": "Salesforce API v2.0 integration",
+    "customer_data": {
+      "name": "Jane Doe",
+      "company": "Acme Corp",
+      "phone": "+919876543210"
+    },
+    "ai_attempted": true,
+    "reason": "Technical query outside knowledge base"
+  }
+  ✅ Package prepared
+
+[Task 3: Notify Human Agent]
+  Send to Agent Dashboard:
+  🔔 "New escalation from AI: Technical query about Salesforce API"
+  ✅ Agent notified
+
+[Task 4: Warm Transfer]
+  Connect call: User ↔ Agent John
+  ✅ Transfer complete: 3 seconds
+
+─────────────────────────────────────────────────────────────────
+
+Agent John: "Hi, this is John from TechCorp technical team. I understand 
+             you have questions about Salesforce API integration. 
+             Yes, we do support v2.0. Let me explain..."
+
+[Human agent continues conversation]
+
+─────────────────────────────────────────────────────────────────
+
+📊 Analytics:
+
+AI Handling: Partial (greeting + escalation)
+Escalation Reason: Query outside knowledge base
+Escalation Time: 8 seconds
+Human Agent: Connected successfully
+Customer Experience: Seamless handoff
+
+
+Real-Time System Metrics Dashboard
+┌──────────────────────────────────────────────────────────────────┐
+│             LIVE CALL MONITORING DASHBOARD                       │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Active Calls: 3                                                 │
+│  Queue: 0                                                        │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ Call #1 - User: john_123                                   │ │
+│  │ Duration: 00:45                                            │ │
+│  │ Status: 🟢 Active                                           │ │
+│  │ Intent: product_query                                      │ │
+│  │ Stage: Resolution (using RAG)                              │ │
+│  │ Response Time: 1.8s avg                                    │ │
+│  │ Knowledge Used: ✅ Yes (3 docs retrieved)                   │ │
+│  │ Actions: None pending                                      │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ Call #2 - User: sarah_456                                  │ │
+│  │ Duration: 01:20                                            │ │
+│  │ Status: 🟡 Clarification                                    │ │
+│  │ Intent: callback_request                                   │ │
+│  │ Stage: Gathering time info                                 │ │
+│  │ Response Time: 2.1s avg                                    │ │
+│  │ Missing: callback_time                                     │ │
+│  │ Actions: Pending schedule_callback                         │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ Call #3 - User: mike_789                                   │ │
+│  │ Duration: 02:15                                            │ │
+│  │ Status: 🔵 Background Processing                            │ │
+│  │ Intent: complaint (delivery_delay)                         │ │
+│  │ Stage: Sending communications                              │ │
+│  │ Response Time: 1.9s                                        │ │
+│  │ Actions: ⏳ Sending SMS, Email                              │ │
+│  │ Ticket: #12346 (Created)                                   │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  Performance Metrics (Last Hour):                               │
+│  ├─ Total Calls: 24                                             │
+│  ├─ Avg Response Time: 2.1s                                     │
+│  ├─ RAG Usage: 18/24 (75%)                                      │
+│  ├─ Autonomous Resolution: 20/24 (83%)                          │
+│  ├─ Escalations: 4/24 (17%)                                     │
+│  ├─ SMS Sent: 15                                                │
+│  ├─ Emails Sent: 12                                             │
+│  ├─ WhatsApp Sent: 8                                            │
+│  └─ Avg Customer Satisfaction: 4.2/5                            │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+Key Takeaways from Examples
+Speed Breakdown:
+Total Response Time: ~2 seconds
+├─ STT (Whisper): 600-800ms
+├─ RAG Query (ChromaDB): 100-300ms
+├─ LLM (Mistral 7B): 800-1200ms
+└─ TTS (pyttsx3): 400-600ms
+
+Background Actions: 2-5 seconds (parallel, doesn't block)
