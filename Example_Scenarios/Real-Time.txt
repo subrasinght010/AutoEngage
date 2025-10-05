@@ -741,3 +741,437 @@ Total Response Time: ~2 seconds
 └─ TTS (pyttsx3): 400-600ms
 
 Background Actions: 2-5 seconds (parallel, doesn't block)
+
+
+Advanced Real-Time ScenariosScenario 6: Multi-Turn Conversation with Context Memory
+┌─────────────────────────────────────────────────────────────────┐
+│ Complex Multi-Turn Conversation                                 │
+│ Testing Context Retention & RAG Updates                         │
+└─────────────────────────────────────────────────────────────────┘
+
+TIME: 00:00 - Call Start
+
+AI Agent: "Hello, I'm the AI support agent of TechCorp. 
+           How can I help you today, sir?"
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:03 - Turn 1
+
+User: "What are your pricing plans?"
+
+[Processing - 2.0s]
+  ├─ STT: "What are your pricing plans?" (~700ms)
+  ├─ RAG Query: "pricing plans"
+  │   Results (Top 3):
+  │   ├─ Doc 1 (0.94): "Basic Plan: ₹999/month - 10 users, 100GB..."
+  │   ├─ Doc 2 (0.91): "Professional Plan: ₹2,999/month - 50 users..."
+  │   └─ Doc 3 (0.88): "Enterprise Plan: Custom pricing..."
+  │   
+  ├─ LLM Response:
+  │   {
+  │     "immediate_response": "We have three pricing plans. The Basic 
+  │                            plan starts at ₹999 per month for 10 users. 
+  │                            The Professional plan is ₹2,999 per month 
+  │                            for 50 users. And we have a custom Enterprise 
+  │                            plan for larger organizations. Which one 
+  │                            interests you?",
+  │     "intent": "product_query",
+  │     "context_stored": {
+  │       "topic": "pricing",
+  │       "plans_mentioned": ["basic", "professional", "enterprise"]
+  │     }
+  │   }
+
+AI Agent: "We have three pricing plans. The Basic plan starts at 
+           ₹999 per month for 10 users. The Professional plan is 
+           ₹2,999 per month for 50 users. And we have a custom 
+           Enterprise plan for larger organizations. Which one 
+           interests you?"
+
+[Conversation State Updated]
+  └─ conversation_context = {
+       "topic": "pricing",
+       "plans_mentioned": ["basic", "professional", "enterprise"],
+       "user_interested": null
+     }
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:10 - Turn 2 (User asks follow-up without repeating context)
+
+User: "What's included in the professional one?"
+
+[Processing - 1.8s]
+  ├─ STT: "What's included in the professional one?" (~650ms)
+  ├─ Context Analysis: User referring to "professional" from previous turn
+  ├─ RAG Query: "professional plan features" + context
+  │   Results:
+  │   ├─ Doc 1 (0.96): "Professional Plan features: 50 users, 500GB 
+  │   │                  storage, priority support, analytics dashboard, 
+  │   │                  API access, custom integrations..."
+  │   
+  ├─ LLM Response (with context):
+  │   Prompt includes:
+  │   """
+  │   Conversation History:
+  │   User: "What are your pricing plans?"
+  │   AI: "We have three pricing plans... Which interests you?"
+  │   User: "What's included in the professional one?"
+  │   
+  │   Context: User is asking about Professional Plan (₹2,999/month)
+  │   
+  │   Knowledge: [Professional plan features...]
+  │   """
+  │   
+  │   Output:
+  │   {
+  │     "immediate_response": "The Professional plan includes 50 users, 
+  │                            500GB storage, priority support, an analytics 
+  │                            dashboard, full API access, and custom 
+  │                            integrations. It's perfect for growing teams. 
+  │                            Would you like me to send you the detailed 
+  │                            feature comparison?",
+  │     "intent": "product_query",
+  │     "context_stored": {
+  │       "topic": "pricing",
+  │       "focused_plan": "professional",
+  │       "features_explained": true
+  │     }
+  │   }
+
+AI Agent: "The Professional plan includes 50 users, 500GB storage, 
+           priority support, an analytics dashboard, full API access, 
+           and custom integrations. It's perfect for growing teams. 
+           Would you like me to send you the detailed feature comparison?"
+
+[Context Updated]
+  └─ conversation_context = {
+       "topic": "pricing",
+       "focused_plan": "professional",
+       "features_explained": true,
+       "offer_made": "feature_comparison"
+     }
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:18 - Turn 3 (Implicit request)
+
+User: "Yes, send it on email"
+
+[Processing - 1.5s]
+  ├─ STT: "Yes, send it on email" (~600ms)
+  ├─ Context Understanding: 
+  │   "it" = feature comparison (from previous offer)
+  │   "email" = channel preference
+  ├─ LLM Response:
+  │   {
+  │     "immediate_response": "Perfect! I'll send the detailed feature 
+  │                            comparison to your email right away.",
+  │     "intent": "send_details_email",
+  │     "entities": {
+  │       "channel": "email",
+  │       "details_type": "feature_comparison_professional",
+  │       "email": "user@example.com"
+  │     },
+  │     "actions": ["send_email"]
+  │   }
+
+AI Agent: "Perfect! I'll send the detailed feature comparison to 
+           your email right away."
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND - Intelligent Email Generation                      │
+└─────────────────────────────────────────────────────────────────┘
+
+[Email Generation Process - 2.5s]
+  
+  ├─ Step 1: Fetch Relevant Knowledge
+  │   Query: "professional plan features comparison"
+  │   Retrieved: Full feature matrix, pricing details, testimonials
+  │
+  ├─ Step 2: Generate Personalized Email
+  │   Context Used:
+  │   - User showed interest in Professional Plan
+  │   - Mentioned growing teams
+  │   - Wants feature comparison
+  │   
+  │   Email Template Enhanced with:
+  │   - Professional Plan highlights
+  │   - Comparison with Basic and Enterprise
+  │   - Case studies for similar company sizes
+  │   - Special offer (14-day free trial)
+  │   
+  ├─ Step 3: Send via SendGrid
+  │   To: user@example.com
+  │   Subject: "TechCorp Professional Plan - Feature Comparison"
+  │   
+  │   Body:
+  │   """
+  │   Dear [Name],
+  │   
+  │   Thank you for your interest in TechCorp's Professional Plan!
+  │   
+  │   Based on our conversation, I've prepared a detailed comparison 
+  │   focusing on the Professional Plan features:
+  │   
+  │   [Beautiful HTML table with feature comparison]
+  │   
+  │   🎁 Special Offer: Start your 14-day free trial today!
+  │   
+  │   [CTA Button: Start Free Trial]
+  │   
+  │   Questions? Reply to this email or call us.
+  │   
+  │   Best regards,
+  │   TechCorp Team
+  │   """
+  │   
+  │   ✅ Sent successfully (Status: 202)
+  │
+  └─ Step 4: Log Interaction
+      INSERT INTO conversations (lead_id, action, details)
+      VALUES ('user_123', 'email_sent', 
+              '{"type": "feature_comparison", "plan": "professional"}')
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:25 - Turn 4 (Change of topic, but maintaining context)
+
+User: "Also, do you have a mobile app?"
+
+[Processing - 1.9s]
+  ├─ STT: "Also, do you have a mobile app?" (~650ms)
+  ├─ Topic Shift Detection: New query, but "Also" indicates continuation
+  ├─ RAG Query: "mobile app"
+  │   Results:
+  │   ├─ Doc 1 (0.89): "TechCorp mobile app available on iOS and 
+  │   │                  Android. Features include..."
+  │   
+  ├─ LLM Response (maintaining conversation flow):
+  │   {
+  │     "immediate_response": "Yes, we have mobile apps for both iOS 
+  │                            and Android. The app includes all core 
+  │                            features like user management, real-time 
+  │                            analytics, and notifications. It's included 
+  │                            free with all plans, including Professional.",
+  │     "intent": "product_query",
+  │     "context_stored": {
+  │       "topic": "mobile_app",
+  │       "still_interested_in": "professional_plan"
+  │     }
+  │   }
+
+AI Agent: "Yes, we have mobile apps for both iOS and Android. 
+           The app includes all core features like user management, 
+           real-time analytics, and notifications. It's included 
+           free with all plans, including Professional."
+
+[Notice: AI remembered user is interested in Professional Plan]
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:32 - Turn 5 (Decision point)
+
+User: "Great! I think I want to go ahead. Can someone call me 
+       tomorrow to discuss setup?"
+
+[Processing - 2.0s]
+  ├─ STT: Full transcription (~700ms)
+  ├─ Intent: Callback + Purchase intent (HOT LEAD!)
+  ├─ LLM Response:
+  │   {
+  │     "immediate_response": "Excellent! I'm glad the Professional 
+  │                            plan fits your needs. I'd be happy to 
+  │                            schedule a call for tomorrow. What time 
+  │                            works best for you?",
+  │     "intent": "callback_request",
+  │     "entities": {
+  │       "callback_date": "tomorrow",
+  │       "callback_time": null,
+  │       "purchase_intent": "high",
+  │       "interested_plan": "professional",
+  │       "missing_info": ["callback_time"]
+  │     },
+  │     "lead_quality": "hot"
+  │   }
+
+AI Agent: "Excellent! I'm glad the Professional plan fits your needs. 
+           I'd be happy to schedule a call for tomorrow. What time 
+           works best for you?"
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:38 - Turn 6 (Final details)
+
+User: "Around 2 PM"
+
+[Processing - 1.8s]
+  ├─ LLM Response:
+  │   {
+  │     "immediate_response": "Perfect! I've scheduled a call for 
+  │                            tomorrow at 2 PM. Our sales specialist 
+  │                            will call you to discuss the Professional 
+  │                            plan setup and answer any questions. You'll 
+  │                            receive a confirmation SMS and email shortly.",
+  │     "intent": "callback_request",
+  │     "entities": {
+  │       "callback_datetime": "2025-10-06T14:00:00",
+  │       "phone": "+919876543210"
+  │     },
+  │     "actions": ["schedule_callback", "send_sms", "send_email", 
+  │                 "notify_sales_team", "create_hot_lead"]
+  │   }
+
+AI Agent: "Perfect! I've scheduled a call for tomorrow at 2 PM. 
+           Our sales specialist will call you to discuss the 
+           Professional plan setup and answer any questions. You'll 
+           receive a confirmation SMS and email shortly."
+
+┌─────────────────────────────────────────────────────────────────┐
+│ BACKGROUND - Hot Lead Processing (High Priority)               │
+└─────────────────────────────────────────────────────────────────┘
+
+[Parallel Tasks - All running simultaneously]
+
+[Task 1: Create Hot Lead Record]
+  INSERT INTO leads (id, status, quality, interested_plan, notes)
+  VALUES ('user_123', 'hot_lead', 'high', 'professional',
+          'Interested in Professional plan. Asked about mobile app. 
+           Wants setup call.')
+  
+  Priority: HIGH
+  Assigned To: Sales Team (auto)
+  ✅ Created in CRM
+
+[Task 2: Schedule Callback]
+  INSERT INTO callbacks 
+  VALUES ('2025-10-06 14:00:00', 'user_123', 'sales_call', 
+          'professional_plan_setup')
+  
+  Notify: Sales Manager + Assigned Rep
+  Calendar: Google Calendar invite sent
+  ✅ Scheduled
+
+[Task 3: Send SMS Confirmation]
+  To: +919876543210
+  Message: "Hi! Your call with TechCorp is confirmed for tomorrow 
+           at 2 PM to discuss Professional Plan setup. We'll call 
+           you then. - TechCorp Sales"
+  ✅ Sent (Delivered in 3s)
+
+[Task 4: Send Detailed Email]
+  To: user@example.com
+  Subject: "Your Call is Scheduled - Professional Plan Setup"
+  
+  Body:
+  """
+  Dear [Name],
+  
+  Great news! Your call is confirmed for:
+  📅 Tomorrow, October 6, 2025
+  ⏰ 2:00 PM IST
+  📞 We'll call you at: +91 98765 43210
+  
+  What we'll cover:
+  ✅ Professional Plan features in detail
+  ✅ Setup and onboarding process
+  ✅ Pricing and payment options
+  ✅ 14-day free trial activation
+  ✅ Your specific requirements
+  
+  In the meantime:
+  📄 Feature Comparison Guide (attached)
+  📱 Download our mobile app: [iOS] [Android]
+  💬 Questions? Reply to this email
+  
+  Looking forward to speaking with you!
+  
+  Best regards,
+  TechCorp Sales Team
+  """
+  
+  Attachments:
+  - feature_comparison.pdf
+  - professional_plan_guide.pdf
+  
+  ✅ Sent (with attachments)
+
+[Task 5: Notify Sales Team]
+  Slack Message to #sales-team:
+  """
+  🔥 HOT LEAD ALERT!
+  
+  Lead: Jane Doe (user_123)
+  Phone: +91 98765 43210
+  Email: user@example.com
+  Interest: Professional Plan
+  Call Scheduled: Tomorrow 2 PM
+  
+  Context:
+  - Asked about pricing (interested in Professional)
+  - Asked about mobile app
+  - Ready to purchase, wants setup discussion
+  - High purchase intent detected
+  
+  AI Conversation Summary: [Link]
+  
+  @john_sales You're assigned to this call.
+  """
+  ✅ Notification sent
+
+[Task 6: Prepare Sales Materials]
+  Auto-generate sales packet:
+  - Customer profile
+  - Conversation transcript
+  - Recommended talking points
+  - Pricing proposal (Professional Plan)
+  - Competitor comparison
+  ✅ Ready for sales rep
+
+[Task 7: Update Analytics]
+  - Lead Source: Voice Call (AI)
+  - Conversion Stage: Consideration → Intent
+  - Expected Deal Value: ₹2,999/month = ₹35,988/year
+  - Win Probability: 75%
+  - Next Action: Sales Call (scheduled)
+  ✅ Tracked
+
+─────────────────────────────────────────────────────────────────
+
+TIME: 00:45 - Closing
+
+AI Agent: "Is there anything else I can help you with today?"
+
+User: "No, that's all. Thank you!"
+
+AI Agent: "You're very welcome! We're excited to speak with you 
+           tomorrow at 2 PM. Have a great day!"
+
+[Call Ends]
+
+─────────────────────────────────────────────────────────────────
+
+📊 Complete Call Analytics:
+
+Duration: 45 seconds
+Turns: 6
+Intents: product_query (3x), send_details_email (1x), callback_request (1x)
+Topics: pricing, features, mobile app, purchase
+RAG Queries: 4 successful
+Knowledge Documents Used: 6
+Context Switches: 2 (smooth transitions)
+Actions Executed: 7
+  ✅ Email sent (2x)
+  ✅ SMS sent (1x)
+  ✅ Callback scheduled
+  ✅ Hot lead created
+  ✅ Sales team notified
+  ✅ Materials prepared
+
+Lead Quality: HOT 🔥
+Purchase Intent: High (75% probability)
+Expected Revenue: ₹35,988/year
+Customer Satisfaction: 5/5 (predicted)
+
+Autonomous Resolution: 100% (no escalation needed)
