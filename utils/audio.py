@@ -370,3 +370,113 @@ async def handle_audio_chunk(
         stats = validator.get_stats()
         print(f"Buffer: {duration:.2f}s | Chunks: {stats.get('total_received', 0)} | "
               f"Valid: {stats.get('validation_rate', 0)*100:.1f}%")
+        
+
+
+# utils/audio.py - ONLY UPDATE process_audio function
+
+# Add this import at the top of your file
+from nodes.incoming_listener import incoming_listener
+from state.workflow_state import WorkflowState
+
+# ... (keep ALL your existing code)
+
+# REPLACE ONLY the process_audio function:
+
+async def process_audio(
+    audio_bytes: bytes,
+    websocket: WebSocket,
+    validator: AudioValidator,
+    safe_send: Callable = None
+):
+    """
+    Process audio: quality check → STT → route to incoming_listener
+    
+    Changes from original:
+    - Added call to incoming_listener after transcription
+    - incoming_listener handles everything else (AI + intent)
+    """
+    try:
+        # === YOUR EXISTING CODE (NO CHANGES) ===
+        # Resample if needed
+        if NEEDS_RESAMPLING:
+            processed_bytes = await resample_audio(audio_bytes, INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE)
+        else:
+            processed_bytes = audio_bytes
+
+        # Analyze quality
+        quality = await analyze_audio_quality(processed_bytes, OUTPUT_SAMPLE_RATE)
+        if not quality.get('is_technically_valid', True):
+            print("⚠️ Quality check failed")
+            return
+
+        # Preprocess
+        final_audio = await preprocess_audio(processed_bytes)
+
+        # Save WAV (optional)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"/Users/subrat/Desktop/Agent/audio_data/audio_{timestamp}.wav"
+        save_float32_to_wav(final_audio, filename=filename, sample_rate=OUTPUT_SAMPLE_RATE)
+
+        # Transcribe (STT)
+        transcription = await transcribe_with_faster_whisper(final_audio)
+        
+        if not transcription or not transcription.strip():
+            print("ℹ️ No speech detected")
+            return
+        
+        print(f"📝 Transcription: {transcription}")
+        
+        # Send transcription to client
+        if safe_send:
+            stats = validator.get_stats()
+            await safe_send(websocket, {
+                "type": "transcription",
+                "text": transcription,
+                "timestamp": datetime.now().isoformat(),
+                "audio_quality": {
+                    'duration': quality.get('duration'),
+                    'rms_energy': quality.get('rms_energy')
+                },
+                "stats": stats
+            })
+        
+        # === NEW CODE: Route to incoming_listener ===
+        
+        # Get lead_id from websocket
+        lead_id = getattr(websocket, 'lead_id', 'unknown')
+        
+        # Create state
+        state = WorkflowState(
+            lead_id=lead_id,
+            conversation_thread=[],
+            pending_action=None
+        )
+        
+        # Prepare message data
+        message_data = {
+            "lead_id": lead_id,
+            "message": transcription,    # Transcribed text
+            "channel": "web_call",       # Indicates web call
+            "audio_bytes": final_audio   # Original audio
+        }
+        
+        # Route to incoming_listener (it handles everything else)
+        await incoming_listener(state, message_data, websocket)
+        
+        print("✅ Audio processing complete")
+            
+    except Exception as e:
+        print(f"❌ Audio processing failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# === KEEP ALL YOUR OTHER FUNCTIONS AS-IS ===
+# - resample_audio()
+# - analyze_audio_quality()
+# - preprocess_audio()
+# - transcribe_with_faster_whisper()
+# - check_silence_loop()
+# - handle_text_message()
+# - etc.

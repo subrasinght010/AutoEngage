@@ -29,49 +29,49 @@ def setup_rag_system():
         # Sample FAQ
         with open(kb_path / "faqs.txt", "w") as f:
             f.write("""
-# Frequently Asked Questions
+                    # Frequently Asked Questions
 
-Q: What is your refund policy?
-A: We offer a 30-day money-back guarantee. If you're not satisfied, contact us within 30 days of purchase for a full refund.
+                    Q: What is your refund policy?
+                    A: We offer a 30-day money-back guarantee. If you're not satisfied, contact us within 30 days of purchase for a full refund.
 
-Q: How long does shipping take?
-A: Standard shipping takes 5-7 business days. Express shipping is available for 2-3 days delivery.
+                    Q: How long does shipping take?
+                    A: Standard shipping takes 5-7 business days. Express shipping is available for 2-3 days delivery.
 
-Q: What payment methods do you accept?
-A: We accept all major credit cards, debit cards, UPI, net banking, and cash on delivery.
+                    Q: What payment methods do you accept?
+                    A: We accept all major credit cards, debit cards, UPI, net banking, and cash on delivery.
 
-Q: Do you offer technical support?
-A: Yes, we provide 24/7 technical support via phone, email, and chat.
+                    Q: Do you offer technical support?
+                    A: Yes, we provide 24/7 technical support via phone, email, and chat.
 
-Q: What are your business hours?
-A: We're open Monday to Saturday, 9 AM to 6 PM IST. Sunday is closed.
-            """)
+                    Q: What are your business hours?
+                    A: We're open Monday to Saturday, 9 AM to 6 PM IST. Sunday is closed.
+                                """)
         
         # Sample pricing
         with open(kb_path / "pricing.txt", "w") as f:
             f.write("""
-# Product Pricing
+                    # Product Pricing
 
-## Basic Plan
-- Price: ₹999/month
-- Features: 10 users, 100GB storage, email support
-- Best for: Small teams
+                    ## Basic Plan
+                    - Price: ₹999/month
+                    - Features: 10 users, 100GB storage, email support
+                    - Best for: Small teams
 
-## Professional Plan
-- Price: ₹2,999/month
-- Features: 50 users, 500GB storage, priority support, analytics
-- Best for: Growing businesses
+                    ## Professional Plan
+                    - Price: ₹2,999/month
+                    - Features: 50 users, 500GB storage, priority support, analytics
+                    - Best for: Growing businesses
 
-## Enterprise Plan
-- Price: Custom pricing
-- Features: Unlimited users, unlimited storage, dedicated account manager, 24/7 support
-- Best for: Large organizations
+                    ## Enterprise Plan
+                    - Price: Custom pricing
+                    - Features: Unlimited users, unlimited storage, dedicated account manager, 24/7 support
+                    - Best for: Large organizations
 
-All plans include:
-- Free 14-day trial
-- No credit card required
-- Cancel anytime
-            """)
+                    All plans include:
+                    - Free 14-day trial
+                    - No credit card required
+                    - Cancel anytime
+                                """)
         
         print("✅ Sample files created")
     

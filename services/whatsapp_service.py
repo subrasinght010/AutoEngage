@@ -51,39 +51,39 @@ def get_whatsapp_template(template_name: str, **kwargs) -> str:
     templates = {
         "product_catalog": """Hi {name}! 👋
 
-Here's our product catalog as requested.
+        Here's our product catalog as requested.
 
-📦 Explore our range of products
-💰 Competitive pricing
-🚚 Fast delivery
+        📦 Explore our range of products
+        💰 Competitive pricing
+        🚚 Fast delivery
 
-Feel free to ask if you have any questions!
+        Feel free to ask if you have any questions!
 
-Best regards,
-TechCorp Team""",
-        
-        "pricing_details": """Hi {name}! 👋
+        Best regards,
+        TechCorp Team""",
+                
+                "pricing_details": """Hi {name}! 👋
 
-Here are the pricing details you requested:
+        Here are the pricing details you requested:
 
-{pricing_content}
+        {pricing_content}
 
-Questions? Just reply to this message!
+        Questions? Just reply to this message!
 
-Best regards,
-TechCorp Team""",
-        
-        "callback_confirmation": """Hi {name}! 👋
+        Best regards,
+        TechCorp Team""",
+                
+                "callback_confirmation": """Hi {name}! 👋
 
-Your callback is confirmed for:
-📅 {callback_time}
-📞 {phone}
+        Your callback is confirmed for:
+        📅 {callback_time}
+        📞 {phone}
 
-We'll call you then!
+        We'll call you then!
 
-Best regards,
-TechCorp Team"""
-    }
+        Best regards,
+        TechCorp Team"""
+            }
     
     template = templates.get(template_name, templates["product_catalog"])
     return template.format(**kwargs)

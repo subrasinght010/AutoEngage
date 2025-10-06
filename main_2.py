@@ -178,3 +178,91 @@ async def webhook_sms(request: Request):
         metrics.record_error(type(e).__name__, 'sms')
         metrics.record_message('sms', 'error')
         raise
+
+
+
+
+# main.py - MINIMAL CHANGE
+
+# In your EXISTING /voice_chat WebSocket endpoint, add just ONE line:
+
+@app.websocket("/voice_chat")
+async def voice_chat(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """
+    Your existing WebSocket - only ONE line added
+    """
+    
+    await websocket.accept()
+    print("WebSocket connected")
+    
+    # ... your existing initialization code ...
+    validator = AudioValidator()
+    lead_id_ref = {'value': None}
+    audio_data_ref = {'value': b''}
+    last_chunk_time_ref = {'value': datetime.now()}
+    is_receiving_ref = {'value': False}
+    
+    try:
+        # ... your existing silence check task ...
+        silence_check_task = asyncio.create_task(
+            check_silence_loop(
+                audio_data_ref,
+                last_chunk_time_ref,
+                is_receiving_ref,
+                websocket,
+                validator,
+                safe_send
+            )
+        )
+        
+        # ... your existing message loop ...
+        async for raw_message in websocket.iter_text():
+            try:
+                data = json.loads(raw_message)
+                
+                # Handle start_conversation
+                if data.get("type") == "start_conversation":
+                    user_id = data.get("user_id", "anonymous")
+                    lead_id_ref['value'] = user_id
+                    
+                    # ✅ ADD THIS ONE LINE:
+                    websocket.lead_id = user_id
+                    
+                    print(f"🎙️ Conversation started: {user_id}")
+                    
+                    # ... rest of your existing code ...
+                    await websocket.send_json({
+                        "type": "status",
+                        "message": "ready"
+                    })
+                    continue
+                
+                # ... rest of your existing handlers (ping, etc.) ...
+                elif data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    continue
+                
+            except json.JSONDecodeError:
+                # ... your existing audio handling ...
+                audio_chunk = raw_message.encode() if isinstance(raw_message, str) else raw_message
+                audio_data_ref['value'] += audio_chunk
+                last_chunk_time_ref['value'] = datetime.now()
+                is_receiving_ref['value'] = True
+                validator.validate_chunk(audio_chunk)
+    
+    except WebSocketDisconnect:
+        print("Client disconnected")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        # ... your existing cleanup code ...
+        if silence_check_task and not silence_check_task.done():
+            silence_check_task.cancel()
+        
+        if websocket.application_state == WebSocketState.CONNECTED:
+            await websocket.close()
+
+
+# ==================== THAT'S IT! ====================
+# Only ONE line added: websocket.lead_id = user_id
+# Everything else stays exactly as you have it
